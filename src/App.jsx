@@ -1,0 +1,148 @@
+import React, { useState, useEffect } from "react";
+import { QuizView } from "./components/QuizView";
+import { WordList } from "./components/WordList";
+import { StatsView } from "./components/StatsView";
+import { SettingsView } from "./components/SettingsView";
+import { AddWordModal } from "./components/AddWordModal";
+import { Navigation } from "./components/Navigation";
+import { storageService } from "./services/storageService";
+import { syncService } from "./services/syncService";
+import { Cloud, CloudCheck, RefreshCw } from "lucide-react";
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState("quiz"); // "quiz" | "list" | "stats" | "settings"
+  const [words, setWords] = useState([]);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(syncService.status);
+
+  // Charger les mots au démarrage et écouter les changements
+  useEffect(() => {
+    // 1. Chargement initial local
+    const loadedWords = storageService.getWords();
+    setWords(loadedWords);
+
+    // 2. Synchronisation initiale avec le Cloud si configuré
+    syncService.pullData().then((res) => {
+      if (res && res.success && res.data) {
+        storageService.applyRemoteData(res.data);
+        setWords(storageService.getWords());
+      }
+    });
+
+    // 3. Écoute des mises à jour distantes en direct (Realtime)
+    const unsubRemote = syncService.onRemoteUpdate((remoteData) => {
+      if (remoteData) {
+        storageService.applyRemoteData(remoteData);
+        setWords(storageService.getWords());
+      }
+    });
+
+    // 4. Écoute du statut de synchronisation
+    const unsubStatus = syncService.onStatusChange((status) => {
+      setSyncStatus(status);
+    });
+
+    return () => {
+      unsubRemote();
+      unsubStatus();
+    };
+  }, []);
+
+  const handleWordsUpdate = (updatedWords) => {
+    setWords(updatedWords);
+  };
+
+  const handleWordAdded = (newWord) => {
+    const loaded = storageService.getWords();
+    setWords(loaded);
+  };
+
+  const unlearnedCount = words.filter((w) => !w.learned).length;
+  const isSyncConfigured = Boolean(syncService.getConfig().url && syncService.getConfig().anonKey);
+
+  return (
+    <div className="flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
+      
+      {/* Barre supérieure minimale */}
+      <header className="sticky top-0 z-20 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md px-4 py-3 border-b border-slate-200/50 dark:border-slate-800/50">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-xs shadow-xs">
+              EN
+            </div>
+            <span className="font-extrabold text-sm tracking-tight bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
+              Quiz Anglais
+            </span>
+
+            {/* Indicateur de synchro Cloud */}
+            {isSyncConfigured && (
+              <button 
+                onClick={() => setActiveTab("settings")}
+                title={syncStatus === "syncing" ? "Synchronisation en cours..." : "Synchronisation cloud active"}
+                className="flex items-center text-indigo-600 dark:text-indigo-400 p-0.5 hover:opacity-80 transition"
+              >
+                {syncStatus === "syncing" ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                ) : (
+                  <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+                )}
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold px-2.5 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-full text-slate-600 dark:text-slate-300">
+              {unlearnedCount > 0 ? `${unlearnedCount} à apprendre` : "Tout acquis 🎉"}
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {/* Vue principale */}
+      <main className="flex-1 flex flex-col pt-3">
+        {activeTab === "quiz" && (
+          <QuizView
+            words={words}
+            onWordsUpdate={handleWordsUpdate}
+            onOpenAdd={() => setIsAddModalOpen(true)}
+          />
+        )}
+
+        {activeTab === "list" && (
+          <WordList
+            words={words}
+            onWordsUpdate={handleWordsUpdate}
+            onOpenAdd={() => setIsAddModalOpen(true)}
+          />
+        )}
+
+        {activeTab === "stats" && (
+          <StatsView words={words} />
+        )}
+
+        {activeTab === "settings" && (
+          <SettingsView
+            words={words}
+            onWordsUpdate={handleWordsUpdate}
+          />
+        )}
+      </main>
+
+      {/* Barre de navigation inférieure */}
+      <Navigation
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        onOpenAdd={() => setIsAddModalOpen(true)}
+        unlearnedCount={unlearnedCount}
+      />
+
+      {/* Modal d'ajout de vocabulaire avec traduction automatique */}
+      <AddWordModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        onWordAdded={handleWordAdded}
+      />
+
+    </div>
+  );
+}

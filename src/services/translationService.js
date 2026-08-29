@@ -14,7 +14,9 @@ const GEMINI_STORAGE_KEY = "quiz_anglais_gemini_api_key";
 export const translationService = {
   getGeminiApiKey: () => {
     try {
-      return localStorage.getItem(GEMINI_STORAGE_KEY) || "";
+      const stored = localStorage.getItem(GEMINI_STORAGE_KEY);
+      if (stored && stored.trim()) return stored.trim();
+      return (import.meta.env.VITE_GEMINI_API_KEY || "").trim();
     } catch {
       return "";
     }
@@ -39,7 +41,7 @@ export const translationService = {
     const key = (apiKey || "").trim();
     if (!key) return { success: false, error: "Veuillez saisir une clé API." };
 
-    const testModels = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"];
+    const testModels = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"];
     let lastErr = "";
 
     for (const model of testModels) {
@@ -49,7 +51,7 @@ export const translationService = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: "OK" }] }]
+            contents: [{ parts: [{ text: "Hello" }] }]
           })
         });
 
@@ -95,8 +97,7 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
       "gemini-2.0-flash",
       "gemini-2.0-flash-lite",
       "gemini-1.5-flash",
-      "gemini-1.5-flash-8b",
-      "gemini-2.5-flash"
+      "gemini-1.5-pro"
     ];
 
     let lastError = null;
@@ -112,7 +113,6 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
-              responseMimeType: "application/json",
               temperature: 0.1
             }
           })
@@ -138,7 +138,22 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawText) throw new Error("Réponse vide de Gemini");
 
-    const parsed = JSON.parse(rawText);
+    // Nettoyage robuste du texte JSON (fences markdown ```json ... ``` ou texte entourant)
+    let text = rawText.trim();
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (start !== -1 && end !== -1 && end > start) {
+        parsed = JSON.parse(text.substring(start, end + 1));
+      } else {
+        throw new Error(`Réponse JSON invalide : ${text.substring(0, 80)}`);
+      }
+    }
     
     const validPos = ["noun", "verb", "adjective", "adverb", "preposition", "expression"];
     let pos = (parsed.part_of_speech || "noun").toLowerCase().trim();
@@ -312,12 +327,13 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
       try {
         return await translationService.lookupWithGemini(rawQuery, apiKey);
       } catch (err) {
-        console.warn("Gemini a échoué, bascule automatique sur le moteur intégré :", err);
+        console.error("Gemini a échoué, bascule automatique sur le moteur intégré :", err);
         // Fallback transparent sur le moteur gratuit au lieu de bloquer l'utilisateur
         const fallbackRes = await translationService.lookupBuiltIn(rawQuery);
         return {
           ...fallbackRes,
-          source: `${fallbackRes.source} (IA indisponible)`
+          source: `Moteur Hybride (Erreur IA : ${err.message})`,
+          error: err.message
         };
       }
     }

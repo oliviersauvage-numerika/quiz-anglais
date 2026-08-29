@@ -62,10 +62,26 @@ export function SettingsView({ words, onWordsUpdate }) {
     setTimeout(() => setNotification(null), 3500);
   };
 
-  const handleSaveApiKey = () => {
-    translationService.setGeminiApiKey(apiKeyInput);
-    setApiKeySaved(Boolean(apiKeyInput.trim()));
-    showNotif(apiKeyInput.trim() ? "Clé API IA enregistrée !" : "Clé API supprimée (Moteur intégré actif)");
+  const handleSaveApiKey = async () => {
+    const trimmed = apiKeyInput.trim();
+    if (!trimmed) {
+      translationService.setGeminiApiKey("");
+      setApiKeySaved(false);
+      showNotif("Clé API supprimée (Moteur intégré actif)");
+      return;
+    }
+
+    showNotif("Vérification de la clé auprès de Google Gemini...");
+    const res = await translationService.testGeminiKey(trimmed);
+    if (res.success) {
+      translationService.setGeminiApiKey(trimmed);
+      setApiKeySaved(true);
+      showNotif(`✅ Clé API IA enregistrée et validée (${res.model}) !`);
+    } else {
+      translationService.setGeminiApiKey(trimmed);
+      setApiKeySaved(true);
+      showNotif(`⚠️ Clé enregistrée mais avertissement Google : ${res.error}`, "error");
+    }
   };
 
   const handleSaveSupabaseConfig = async () => {

@@ -163,7 +163,7 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!englishWord.trim()) {
       setStatusMessage({ type: "error", text: "Veuillez indiquer le mot ou l'expression en anglais." });
       return;
@@ -175,21 +175,26 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
       return;
     }
 
-    const res = storageService.addWord({
-      english_word: englishWord.trim(),
-      part_of_speech: partOfSpeech,
-      french_translations: cleanTranslations
-    });
+    try {
+      const res = await storageService.addWord({
+        english_word: englishWord.trim(),
+        part_of_speech: partOfSpeech,
+        french_translations: cleanTranslations
+      });
 
-    if (!res.success && res.reason === "duplicate") {
-      setDuplicateFound(res.existing);
-      setStatusMessage({ type: "warning", text: `« ${englishWord} » est déjà enregistré dans votre liste.` });
-      return;
-    }
+      if (!res.success && res.reason === "duplicate") {
+        setDuplicateFound(res.existing);
+        setStatusMessage({ type: "warning", text: `« ${englishWord} » est déjà enregistré dans votre liste.` });
+        return;
+      }
 
-    if (res.success) {
-      onWordAdded(res.word);
-      onClose();
+      if (res.success) {
+        onWordAdded(res.word);
+        onClose();
+      }
+    } catch (err) {
+      console.error("Erreur enregistrement mot :", err);
+      setStatusMessage({ type: "error", text: `Erreur lors de l'enregistrement : ${err.message}` });
     }
   };
 

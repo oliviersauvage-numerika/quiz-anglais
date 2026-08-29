@@ -104,6 +104,7 @@ class SyncService {
       const url = params.get("url");
       const key = params.get("key");
       const code = params.get("code");
+      const gemini = params.get("gemini");
 
       if (url && key) {
         this.saveConfig({
@@ -111,8 +112,14 @@ class SyncService {
           anonKey: decodeURIComponent(key),
           syncCode: code ? decodeURIComponent(code) : ""
         });
+      }
 
-        // Nettoyer l'URL
+      if (gemini) {
+        localStorage.setItem("quiz_anglais_gemini_api_key", decodeURIComponent(gemini).trim());
+      }
+
+      // Nettoyer l'URL
+      if (url || key || gemini) {
         window.history.replaceState(null, "", window.location.pathname);
       }
     } catch (e) {
@@ -131,6 +138,11 @@ class SyncService {
         url: config.url,
         key: config.anonKey
       });
+
+      const geminiKey = localStorage.getItem("quiz_anglais_gemini_api_key");
+      if (geminiKey && geminiKey.trim()) {
+        params.set("gemini", geminiKey.trim());
+      }
 
       return `${baseUrl}#pair?${params.toString()}`;
     } catch {
@@ -360,9 +372,22 @@ class SyncService {
       if (updates.part_of_speech !== undefined) dbUpdates.part_of_speech = updates.part_of_speech.trim().toLowerCase();
       if (updates.french_translations !== undefined) dbUpdates.french_translations = updates.french_translations;
       if (updates.successCount !== undefined) dbUpdates.success_count = updates.successCount;
+      if (updates.success_count !== undefined) dbUpdates.success_count = updates.success_count;
       if (updates.learned !== undefined) dbUpdates.learned = updates.learned;
+      if (updates.srsStage !== undefined) dbUpdates.srs_stage = updates.srsStage;
+      if (updates.srs_stage !== undefined) dbUpdates.srs_stage = updates.srs_stage;
+      if (updates.firstLearnedAt !== undefined) dbUpdates.first_learned_at = updates.firstLearnedAt;
+      if (updates.first_learned_at !== undefined) dbUpdates.first_learned_at = updates.first_learned_at;
+      if (updates.nextReviewAt !== undefined) dbUpdates.next_review_at = updates.nextReviewAt;
+      if (updates.next_review_at !== undefined) dbUpdates.next_review_at = updates.next_review_at;
+      if (updates.lastReviewedAt !== undefined) dbUpdates.last_reviewed_at = updates.lastReviewedAt;
+      if (updates.last_reviewed_at !== undefined) dbUpdates.last_reviewed_at = updates.last_reviewed_at;
+      if (updates.isMastered !== undefined) dbUpdates.is_mastered = updates.isMastered;
+      if (updates.is_mastered !== undefined) dbUpdates.is_mastered = updates.is_mastered;
       if (updates.lastAnswered !== undefined) dbUpdates.last_answered = updates.lastAnswered;
+      if (updates.last_answered !== undefined) dbUpdates.last_answered = updates.last_answered;
       if (updates.lastCorrect !== undefined) dbUpdates.last_correct = updates.lastCorrect;
+      if (updates.last_correct !== undefined) dbUpdates.last_correct = updates.last_correct;
 
       const { data, error } = await this.client
         .from("words")

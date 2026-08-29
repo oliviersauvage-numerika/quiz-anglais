@@ -72,27 +72,51 @@ export default function App() {
             </span>
 
             {/* Indicateur de synchro Cloud */}
-            {isSyncConfigured && (
-              <button 
-                onClick={() => setActiveTab("settings")}
-                title={
-                  syncStatus === "syncing" 
-                    ? "Synchronisation avec Supabase en cours..." 
-                    : syncStatus === "synced" 
-                    ? "Base Supabase connectée en temps réel" 
-                    : "Erreur ou hors ligne"
-                }
-                className="flex items-center text-indigo-600 dark:text-indigo-400 p-0.5 hover:opacity-80 transition"
-              >
-                {syncStatus === "syncing" ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+            <button 
+              onClick={() => setActiveTab("settings")}
+              title={
+                !isSyncConfigured
+                  ? "Base de données non configurée. Cliquez pour jumeler l'iPhone ou renseigner Supabase."
+                  : syncStatus === "syncing" 
+                  ? "Synchronisation avec Supabase en cours..." 
+                  : syncStatus === "synced" 
+                  ? "Base de données Supabase connectée en direct" 
+                  : "Erreur de connexion Supabase (mode hors-ligne)"
+              }
+              className={`flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border transition hover:opacity-80 ${
+                isSyncConfigured
+                  ? syncStatus === "synced"
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                    : syncStatus === "syncing"
+                    ? "bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                    : "bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+                  : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+              }`}
+            >
+              {isSyncConfigured ? (
+                syncStatus === "syncing" ? (
+                  <>
+                    <RefreshCw className="w-3 h-3 animate-spin text-amber-500" />
+                    <span className="hidden sm:inline">Synchro...</span>
+                  </>
                 ) : syncStatus === "synced" ? (
-                  <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+                  <>
+                    <Cloud className="w-3 h-3 text-emerald-500" />
+                    <span className="hidden sm:inline">Connecté</span>
+                  </>
                 ) : (
-                  <CloudOff className="w-3.5 h-3.5 text-rose-500" />
-                )}
-              </button>
-            )}
+                  <>
+                    <CloudOff className="w-3 h-3 text-rose-500" />
+                    <span className="hidden sm:inline">Déconnecté</span>
+                  </>
+                )
+              ) : (
+                <>
+                  <CloudOff className="w-3 h-3 text-slate-400" />
+                  <span>Jumeler Cloud</span>
+                </>
+              )}
+            </button>
           </div>
 
           <div className="flex items-center gap-2">

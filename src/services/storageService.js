@@ -1,5 +1,5 @@
 import { initialWords } from "../data/initialWords";
-import { syncService } from "./syncService";
+import { syncService, fromDBWord } from "./syncService";
 import { srsService } from "./srsService";
 
 const STORAGE_KEY = "quiz_anglais_vocab_v2";
@@ -74,33 +74,15 @@ export const storageService = {
         let words = storageService.getWords();
 
         if (eventType === "INSERT" && newRow) {
-          const exists = words.some(w => w.id === newRow.id);
+          const exists = words.some(w => w.id === String(newRow.id));
           if (!exists) {
-            words = [{
-              id: String(newRow.id),
-              english_word: newRow.english_word,
-              part_of_speech: newRow.part_of_speech,
-              french_translations: newRow.french_translations || [],
-              successCount: newRow.success_count || 0,
-              learned: Boolean(newRow.learned),
-              lastAnswered: newRow.last_answered || undefined,
-              lastCorrect: newRow.last_correct !== null ? newRow.last_correct : undefined,
-              createdAt: newRow.created_at || new Date().toISOString()
-            }, ...words];
+            words = [fromDBWord(newRow), ...words];
           }
         } else if (eventType === "UPDATE" && newRow) {
-          words = words.map(w => w.id === newRow.id ? {
-            ...w,
-            english_word: newRow.english_word,
-            part_of_speech: newRow.part_of_speech,
-            french_translations: newRow.french_translations || [],
-            successCount: newRow.success_count || 0,
-            learned: Boolean(newRow.learned),
-            lastAnswered: newRow.last_answered || undefined,
-            lastCorrect: newRow.last_correct !== null ? newRow.last_correct : undefined
-          } : w);
+          const updatedWord = fromDBWord(newRow);
+          words = words.map(w => w.id === String(newRow.id) ? { ...w, ...updatedWord } : w);
         } else if (eventType === "DELETE" && oldRow) {
-          words = words.filter(w => w.id !== oldRow.id);
+          words = words.filter(w => w.id !== String(oldRow.id));
         }
 
         storageService.saveWordsLocally(words);
@@ -160,7 +142,11 @@ export const storageService = {
     storageService.saveWordsLocally(updated);
 
     // 2. Insertion en base de données Supabase
-    syncService.insertWord(word);
+    try {
+      await syncService.insertWord(word);
+    } catch (e) {
+      console.warn("Supabase insertion en arrière-plan :", e);
+    }
 
     return { success: true, word };
   },

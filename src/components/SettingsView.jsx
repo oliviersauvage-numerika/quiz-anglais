@@ -129,11 +129,23 @@ create table if not exists public.words (
   french_translations jsonb not null default '[]'::jsonb,
   success_count integer default 0,
   learned boolean default false,
+  srs_stage integer default 0,
+  first_learned_at timestamptz,
+  next_review_at timestamptz,
+  last_reviewed_at timestamptz,
+  is_mastered boolean default false,
   last_answered timestamptz,
   last_correct boolean,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+-- Si la table existait déjà, ajouter les nouvelles colonnes SRS en toute sécurité
+alter table public.words add column if not exists srs_stage integer default 0;
+alter table public.words add column if not exists first_learned_at timestamptz;
+alter table public.words add column if not exists next_review_at timestamptz;
+alter table public.words add column if not exists last_reviewed_at timestamptz;
+alter table public.words add column if not exists is_mastered boolean default false;
 
 -- Index pour recherche rapide et dédoublonnage
 create index if not exists idx_words_english on public.words (lower(english_word));

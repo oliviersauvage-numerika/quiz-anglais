@@ -1,20 +1,26 @@
 import React from "react";
-import { Award, Flame, CheckCircle, Target, BookOpen, Layers } from "lucide-react";
+import { Award, Flame, CheckCircle, Target, BookOpen, Layers, Clock, Bell, Sparkles } from "lucide-react";
 import { storageService } from "../services/storageService";
+import { srsService } from "../services/srsService";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 
 export function StatsView({ words }) {
   const stats = storageService.getGlobalStats();
   const totalWords = words.length;
-  const learnedWords = words.filter((w) => w.learned).length;
-  const progressPercent = totalWords > 0 ? Math.round((learnedWords / totalWords) * 100) : 0;
+
+  const dueCount = words.filter((w) => srsService.isReviewDue(w)).length;
+  const learningCount = words.filter((w) => (w.srsStage || 0) === 0 && !w.learned).length;
+  const reviewingCount = words.filter((w) => (w.srsStage || 0) >= 1 && (w.srsStage || 0) < 10 && !w.isMastered).length;
+  const masteredCount = words.filter((w) => w.isMastered || (w.srsStage || 0) >= 10).length;
+
+  const progressPercent = totalWords > 0 ? Math.round(((reviewingCount + masteredCount) / totalWords) * 100) : 0;
 
   // Répartition par nature grammaticale
   const posCounts = words.reduce((acc, w) => {
     const pos = w.part_of_speech || "other";
     if (!acc[pos]) acc[pos] = { total: 0, learned: 0 };
     acc[pos].total += 1;
-    if (w.learned) acc[pos].learned += 1;
+    if (w.learned || (w.srsStage || 0) > 0) acc[pos].learned += 1;
     return acc;
   }, {});
 
@@ -26,7 +32,7 @@ export function StatsView({ words }) {
     <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-2 pb-24 space-y-4 animate-fade-in">
       <div>
         <h1 className="text-2xl font-black text-slate-900 dark:text-white">Progression</h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">Vue d'ensemble de votre apprentissage</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Répétition espacée & statistiques</p>
       </div>
 
       {/* Carte principale de progression */}
@@ -34,10 +40,10 @@ export function StatsView({ words }) {
         <div className="flex items-center justify-between mb-4">
           <div>
             <span className="text-xs font-semibold uppercase tracking-wider text-indigo-200">
-              Vocabulaire maîtrisé
+              Vocabulaire acquis ou en consolidation
             </span>
             <h2 className="text-3xl font-black mt-0.5">
-              {learnedWords} <span className="text-lg font-normal text-indigo-200">/ {totalWords}</span>
+              {reviewingCount + masteredCount} <span className="text-lg font-normal text-indigo-200">/ {totalWords}</span>
             </h2>
           </div>
           <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center font-black text-xl">
@@ -51,6 +57,42 @@ export function StatsView({ words }) {
             className="bg-white h-full transition-all duration-500 rounded-full"
             style={{ width: `${progressPercent}%` }}
           />
+        </div>
+      </div>
+
+      {/* État des Paliers SRS */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-slate-900 dark:text-white">
+            <Clock className="w-4 h-4 text-indigo-500" />
+            <h3 className="text-xs font-bold uppercase tracking-wider">Paliers de Répétition Espacée</h3>
+          </div>
+          {dueCount > 0 && (
+            <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
+              <Bell className="w-3 h-3" />
+              <span>{dueCount} révisions dues</span>
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="p-3 bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-800/40 rounded-2xl">
+            <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-medium">En apprentissage (3★)</span>
+            <span className="text-xl font-black text-amber-700 dark:text-amber-300">{learningCount} mots</span>
+          </div>
+
+          <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/60 dark:border-indigo-800/40 rounded-2xl">
+            <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-medium">Paliers SRS (J+1 à J+30)</span>
+            <span className="text-xl font-black text-indigo-700 dark:text-indigo-300">{reviewingCount} mots</span>
+          </div>
+
+          <div className="p-3 bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded-2xl col-span-2 flex items-center justify-between">
+            <div>
+              <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-medium">Définitivement Acquis (6 mois)</span>
+              <span className="text-xl font-black text-emerald-700 dark:text-emerald-300">🏆 {masteredCount} mots</span>
+            </div>
+            <Sparkles className="w-6 h-6 text-amber-500" />
+          </div>
         </div>
       </div>
 

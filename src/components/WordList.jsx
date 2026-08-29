@@ -6,10 +6,15 @@ import {
   RotateCcw, 
   CheckCircle2, 
   Plus,
-  X
+  X,
+  Bell,
+  Clock,
+  Sparkles,
+  Calendar
 } from "lucide-react";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 import { storageService } from "../services/storageService";
+import { srsService } from "../services/srsService";
 
 // Fonction utilitaire pour nettoyer et obtenir la clé de tri (sans 'to ', 'a ', 'an ', 'the ')
 export function getSortKey(word) {
@@ -37,8 +42,14 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 export function WordList({ words, onWordsUpdate, onOpenAdd }) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterType, setFilterType] = useState("all"); // "all" | "learning" | "learned"
+  const [filterType, setFilterType] = useState("all"); // "all" | "due" | "learning" | "reviewing" | "mastered"
   const [selectedLetter, setSelectedLetter] = useState(null); // null = toutes les lettres, ou 'A', 'B', etc.
+
+  // Statistiques SRS
+  const dueCount = useMemo(() => words.filter((w) => srsService.isReviewDue(w)).length, [words]);
+  const learningCount = useMemo(() => words.filter((w) => (w.srsStage || 0) === 0 && !w.learned).length, [words]);
+  const reviewingCount = useMemo(() => words.filter((w) => (w.srsStage || 0) >= 1 && (w.srsStage || 0) < 10 && !w.isMastered).length, [words]);
+  const masteredCount = useMemo(() => words.filter((w) => w.isMastered || (w.srsStage || 0) >= 10).length, [words]);
 
   // Calcul du nombre de mots par lettre
   const letterCounts = useMemo(() => {
@@ -69,17 +80,18 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
 
       if (!matchesQuery) return false;
 
-      if (filterType === "learning" && w.learned) return false;
-      if (filterType === "learned" && !w.learned) return false;
+      // Filtre par catégorie SRS
+      if (filterType === "due" && !srsService.isReviewDue(w)) return false;
+      if (filterType === "learning" && ((w.srsStage || 0) > 0 || w.learned)) return false;
+      if (filterType === "reviewing" && ((w.srsStage || 0) === 0 || (w.srsStage || 0) >= 10 || w.isMastered)) return false;
+      if (filterType === "mastered" && !w.isMastered && (w.srsStage || 0) < 10) return false;
 
+      // Filtre alphabétique
       if (selectedLetter && getFirstLetter(w) !== selectedLetter) return false;
 
       return true;
     });
   }, [words, searchQuery, filterType, selectedLetter]);
-
-  const learnedCount = words.filter((w) => w.learned).length;
-  const learningCount = words.length - learnedCount;
 
   const playPronunciation = (text, e) => {
     if (e) e.stopPropagation();
@@ -114,7 +126,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
         <div>
           <h1 className="text-2xl font-black text-slate-900 dark:text-white">Vocabulaire</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            {words.length} mots classés par ordre alphabétique • {learnedCount} acquis
+            {words.length} mots classés par ordre alphabétique
           </p>
         </div>
         <button
@@ -146,7 +158,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
         )}
       </div>
 
-      {/* Filtres par statut (Tous / En cours / Acquis) */}
+      {/* Filtres SRS par statut */}
       <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
         <button
           onClick={() => setFilterType("all")}
@@ -158,6 +170,21 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
         >
           Tous ({words.length})
         </button>
+
+        {dueCount > 0 && (
+          <button
+            onClick={() => setFilterType("due")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition flex items-center gap-1 ${
+              filterType === "due"
+                ? "bg-amber-500 text-white shadow-xs"
+                : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 hover:bg-amber-200"
+            }`}
+          >
+            <Bell className="w-3 h-3" />
+            <span>À réviser ({dueCount})</span>
+          </button>
+        )}
+
         <button
           onClick={() => setFilterType("learning")}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
@@ -168,15 +195,27 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
         >
           En cours ({learningCount})
         </button>
+
         <button
-          onClick={() => setFilterType("learned")}
+          onClick={() => setFilterType("reviewing")}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
-            filterType === "learned"
+            filterType === "reviewing"
+              ? "bg-purple-600 text-white shadow-xs"
+              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200"
+          }`}
+        >
+          Paliers SRS ({reviewingCount})
+        </button>
+
+        <button
+          onClick={() => setFilterType("mastered")}
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+            filterType === "mastered"
               ? "bg-emerald-600 text-white shadow-xs"
               : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200"
           }`}
         >
-          Acquis ({learnedCount})
+          Maîtrisés 🏆 ({masteredCount})
         </button>
       </div>
 
@@ -273,12 +312,21 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
               color: "bg-slate-100 text-slate-700"
             };
 
+            const stage = word.srsStage || (word.learned ? 1 : 0);
+            const stageInfo = srsService.getStageInfo(stage);
+            const isDue = srsService.isReviewDue(word);
+            const relativeDate = srsService.formatRelativeReviewDate(word.nextReviewAt);
+
             return (
               <div
                 key={word.id}
                 className={`bg-white dark:bg-slate-900 rounded-2xl p-3.5 border transition-all shadow-xs ${
-                  word.learned
-                    ? "border-emerald-200/80 dark:border-emerald-950 bg-emerald-50/20"
+                  word.isMastered || stage >= 10
+                    ? "border-amber-300/80 dark:border-amber-800/60 bg-amber-50/20"
+                    : isDue
+                    ? "border-amber-400 dark:border-amber-600 bg-amber-50/30 ring-1 ring-amber-400"
+                    : word.learned || stage > 0
+                    ? "border-indigo-200/80 dark:border-indigo-950 bg-indigo-50/10"
                     : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300"
                 }`}
               >
@@ -313,14 +361,40 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                         </span>
                       ))}
                     </div>
+
+                    {/* Date de révision / Détail du palier */}
+                    <div className="flex items-center gap-2 mt-2 text-[11px]">
+                      {word.isMastered || stage >= 10 ? (
+                        <span className="text-amber-800 dark:text-amber-300 font-bold flex items-center gap-1">
+                          🏆 Maîtrisé (6 mois validés)
+                        </span>
+                      ) : isDue ? (
+                        <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1 animate-pulse">
+                          <Bell className="w-3 h-3" />
+                          <span>À réviser aujourd'hui ({stageInfo.label})</span>
+                        </span>
+                      ) : relativeDate ? (
+                        <span className={`flex items-center gap-1 ${relativeDate.color}`}>
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>Prochaine révision : {relativeDate.text} ({stageInfo.shortLabel})</span>
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">
+                          Apprentissage en cours (3★ requis)
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Statut & Actions */}
+                  {/* Statut SRS & Actions */}
                   <div className="flex flex-col items-end gap-1.5">
-                    {word.learned ? (
-                      <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
-                        <CheckCircle2 className="w-3 h-3" />
-                        Acquis
+                    {word.isMastered || stage >= 10 ? (
+                      <span className="flex items-center gap-1 text-[11px] font-bold text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-700">
+                        🏆 Acquis
+                      </span>
+                    ) : stage > 0 ? (
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${stageInfo.badgeColor}`}>
+                        {stageInfo.shortLabel}
                       </span>
                     ) : (
                       <div className="flex items-center gap-0.5 text-xs">
@@ -340,11 +414,11 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                     )}
 
                     <div className="flex items-center gap-1">
-                      {word.successCount > 0 && (
+                      {(word.successCount > 0 || stage > 0) && (
                         <button
                           onClick={(e) => handleResetProgress(word.id, e)}
                           className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition rounded"
-                          title="Remettre le score à zéro"
+                          title="Remettre à zéro"
                         >
                           <RotateCcw className="w-3 h-3" />
                         </button>

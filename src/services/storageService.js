@@ -1,5 +1,6 @@
 import { initialWords } from "../data/initialWords";
 import { syncService } from "./syncService";
+import { srsService } from "./srsService";
 
 const STORAGE_KEY = "quiz_anglais_vocab_v2";
 const STATS_KEY = "quiz_anglais_stats_v2";
@@ -195,18 +196,7 @@ export const storageService = {
 
     const updated = words.map((w) => {
       if (w.id !== id) return w;
-      
-      const currentCount = w.successCount || 0;
-      const newCount = isCorrect ? currentCount + 1 : currentCount;
-      const isLearned = newCount >= 3;
-
-      updatedWord = {
-        ...w,
-        successCount: newCount,
-        learned: isLearned,
-        lastAnswered: new Date().toISOString(),
-        lastCorrect: isCorrect
-      };
+      updatedWord = srsService.calculateNextState(w, isCorrect);
       return updatedWord;
     });
 
@@ -215,6 +205,11 @@ export const storageService = {
       syncService.updateWord(id, {
         successCount: updatedWord.successCount,
         learned: updatedWord.learned,
+        srsStage: updatedWord.srsStage,
+        firstLearnedAt: updatedWord.firstLearnedAt,
+        nextReviewAt: updatedWord.nextReviewAt,
+        lastReviewedAt: updatedWord.lastReviewedAt,
+        isMastered: updatedWord.isMastered,
         lastAnswered: updatedWord.lastAnswered,
         lastCorrect: updatedWord.lastCorrect
       });
@@ -228,10 +223,27 @@ export const storageService = {
   resetWordProgress: (id) => {
     const words = storageService.getWords();
     const updated = words.map((w) => 
-      w.id === id ? { ...w, successCount: 0, learned: false } : w
+      w.id === id ? { 
+        ...w, 
+        successCount: 0, 
+        learned: false, 
+        srsStage: 0, 
+        firstLearnedAt: undefined, 
+        nextReviewAt: undefined, 
+        lastReviewedAt: undefined, 
+        isMastered: false 
+      } : w
     );
     storageService.saveWordsLocally(updated);
-    syncService.updateWord(id, { successCount: 0, learned: false });
+    syncService.updateWord(id, { 
+      successCount: 0, 
+      learned: false, 
+      srsStage: 0, 
+      firstLearnedAt: null, 
+      nextReviewAt: null, 
+      lastReviewedAt: null, 
+      isMastered: false 
+    });
     return updated;
   },
 
@@ -241,11 +253,15 @@ export const storageService = {
       ...w,
       successCount: 0,
       learned: false,
-      lastAnswered: undefined
+      srsStage: 0,
+      firstLearnedAt: undefined,
+      nextReviewAt: undefined,
+      lastReviewedAt: undefined,
+      isMastered: false,
+      lastAnswered: undefined,
+      lastCorrect: undefined
     }));
     storageService.saveWordsLocally(updated);
-    
-    // Mettre à jour dans Supabase
     syncService.migrateWords(updated);
     return updated;
   },

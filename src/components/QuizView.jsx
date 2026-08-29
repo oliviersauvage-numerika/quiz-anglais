@@ -10,10 +10,15 @@ import {
   HelpCircle, 
   Award,
   Mic,
-  MicOff
+  MicOff,
+  Bell,
+  Clock,
+  Calendar,
+  Zap
 } from "lucide-react";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 import { storageService } from "../services/storageService";
+import { srsService } from "../services/srsService";
 
 export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   const [includeLearned, setIncludeLearned] = useState(false);
@@ -22,6 +27,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   const [selectedFrenchTranslation, setSelectedFrenchTranslation] = useState("");
   const [userAnswer, setUserAnswer] = useState("");
   const [quizState, setQuizState] = useState("answering"); // "answering" | "correct" | "incorrect"
+  const [lastUpdatedWord, setLastUpdatedWord] = useState(null);
   
   const [roundQueue, setRoundQueue] = useState([]);
   const lastWordIdRef = useRef(null);
@@ -34,9 +40,26 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
   const [sessionScore, setSessionScore] = useState({ correct: 0, total: 0 });
 
-  const candidateWords = words.filter((w) => includeLearned || !w.learned);
-  const learnedCount = words.filter((w) => w.learned).length;
+  // Séparation SRS
+  const dueReviews = words.filter((w) => srsService.isReviewDue(w));
+  const learningWords = words.filter((w) => (w.srsStage || 0) === 0);
+  const masteredWords = words.filter((w) => w.isMastered || (w.srsStage || 0) >= 10);
   const totalCount = words.length;
+
+  // Détermination des mots candidats selon les priorités SRS
+  const candidateWords = React.useMemo(() => {
+    if (includeLearned) return words;
+    // 1. Priorité aux révisions dues aujourd'hui + mots en apprentissage
+    const activePool = [...dueReviews, ...learningWords];
+    if (activePool.length > 0) return activePool;
+
+    // 2. Si aucune révision due et aucun mot en apprentissage : mots en cours de palier non maîtrisés
+    const inProgress = words.filter((w) => !w.isMastered && (w.srsStage || 0) < 10);
+    if (inProgress.length > 0) return inProgress;
+
+    // 3. Sinon tous les mots
+    return words;
+  }, [words, includeLearned, dueReviews.length, learningWords.length]);
 
   const isSpeechSupported = typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
@@ -94,7 +117,6 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
           .join("");
         
         if (transcript) {
-          // Enlever d'éventuels points ou espaces superflus ajoutés par la dictée
           const cleaned = transcript.trim().replace(/\.$/, "");
           setUserAnswer(cleaned);
         }
@@ -154,7 +176,12 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     queue = queue.filter((id) => candidateWords.some((w) => w.id === id));
 
     if (queue.length === 0) {
-      queue = shuffleArray(candidateWords.map((w) => w.id));
+      // Prioriser les révisions du jour d'abord dans la file
+      const dueInCandidates = candidateWords.filter(w => srsService.isReviewDue(w)).map(w => w.id);
+      const othersInCandidates = candidateWords.filter(w => !srsService.isReviewDue(w)).map(w => w.id);
+      
+      queue = [...shuffleArray(dueInCandidates), ...shuffleArray(othersInCandidates)];
+      
       if (candidateWords.length > 1 && queue[0] === lastWordIdRef.current) {
         const temp = queue[0];
         queue[0] = queue[1];
@@ -181,6 +208,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     setRoundQueue(queue);
     setUserAnswer("");
     setQuizState("answering");
+    setLastUpdatedWord(null);
   };
 
   const normalize = (text, partOfSpeech = "") => {
@@ -227,6 +255,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
     const { words: updatedWords, updatedWord } = storageService.recordQuizResult(currentWord.id, isCorrect);
     onWordsUpdate(updatedWords);
+    setLastUpdatedWord(updatedWord);
 
     setSessionScore((prev) => ({
       correct: prev.correct + (isCorrect ? 1 : 0),
@@ -237,11 +266,11 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       setQuizState("correct");
       playPronunciation(currentWord.english_word);
 
-      if (updatedWord?.learned) {
+      if (updatedWord?.isMastered || (updatedWord?.srsStage === 1 && !currentWord.learned)) {
         try {
           confetti({
-            particleCount: 70,
-            spread: 60,
+            particleCount: 80,
+            spread: 70,
             origin: { y: 0.7 }
           });
         } catch {
@@ -260,10 +289,10 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
           <Award className="w-10 h-10" />
         </div>
         <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-2">
-          Félicitations ! 🎉
+          Toutes les révisions du jour sont faites ! 🎉
         </h2>
         <p className="text-slate-600 dark:text-slate-300 text-sm mb-6">
-          Vous avez appris la totalité de vos <span className="font-bold text-indigo-600 dark:text-indigo-400">{totalCount} mots</span> (3 réussites validées pour chacun) !
+          Aucun mot n'est en attente de révision aujourd'hui. Vos mots progressent sur le calendrier espacé !
         </p>
 
         <div className="w-full space-y-3">
@@ -272,7 +301,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
             className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-2xl shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-95 transition"
           >
             <RotateCcw className="w-5 h-5" />
-            <span>Lancer un mode Révision</span>
+            <span>S'entraîner en mode Révision libre</span>
           </button>
 
           <button
@@ -291,55 +320,65 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     color: "bg-slate-100 text-slate-800 border-slate-200"
   };
 
+  const isCurrentDue = currentWord && srsService.isReviewDue(currentWord);
+  const currentStageInfo = srsService.getStageInfo(currentWord?.srsStage || (currentWord?.learned ? 1 : 0));
+
   return (
     <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-2 pb-24">
       
-      {/* Progression */}
-      <div className="flex items-center justify-between mb-4">
+      {/* Barre de suivi SRS & Progression */}
+      <div className="flex items-center justify-between mb-3 text-xs">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            Progression
-          </span>
-          <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-full">
-            {learnedCount} / {totalCount} acquis
-          </span>
+          {dueReviews.length > 0 ? (
+            <span className="font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/70 border border-amber-300/80 dark:border-amber-800 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
+              <Bell className="w-3.5 h-3.5" />
+              <span>{dueReviews.length} à réviser aujourd'hui</span>
+            </span>
+          ) : (
+            <span className="font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-1 rounded-full flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>À jour pour aujourd'hui</span>
+            </span>
+          )}
         </div>
 
-        {/* Étoiles du mot actuel */}
-        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 px-2.5 py-1 rounded-xl">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400 mr-1">Ce mot :</span>
-          {[0, 1, 2].map((idx) => (
-            <span
-              key={idx}
-              className={`text-xs ${
-                idx < (currentWord?.successCount || 0)
-                  ? "text-amber-400"
-                  : "text-slate-300 dark:text-slate-600"
-              }`}
-            >
-              ★
-            </span>
-          ))}
-        </div>
+        <span className="font-semibold text-slate-500 dark:text-slate-400">
+          {learningWords.length} en apprentissage
+        </span>
       </div>
 
       {/* Carte de la Question */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl shadow-slate-200/50 dark:shadow-none border border-slate-100 dark:border-slate-800 flex-1 flex flex-col justify-between min-h-[340px] animate-fade-in relative overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl shadow-slate-200/50 dark:shadow-none border border-slate-100 dark:border-slate-800 flex-1 flex flex-col justify-between min-h-[360px] animate-fade-in relative overflow-hidden">
         
         <div>
-          <div className="flex items-center justify-between mb-3">
+          {/* Header de la carte avec Type de palier SRS */}
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
             <span className={`text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full border ${posInfo.color}`}>
               {posInfo.fr}
             </span>
 
-            <span className="text-xs text-slate-400 flex items-center gap-1">
-              <HelpCircle className="w-3.5 h-3.5" />
-              Traduire en anglais
-            </span>
+            {/* Badge SRS du mot actuel */}
+            <div className="flex items-center gap-1.5">
+              {isCurrentDue ? (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white flex items-center gap-1 shadow-xs">
+                  <Bell className="w-3 h-3" />
+                  <span>Révision ({currentStageInfo.shortLabel})</span>
+                </span>
+              ) : currentWord?.srsStage === 0 || !currentWord?.learned ? (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-indigo-600" />
+                  <span>Apprentissage ({currentWord?.successCount || 0}/3 ★)</span>
+                </span>
+              ) : (
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${currentStageInfo.badgeColor}`}>
+                  {currentStageInfo.shortLabel}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Mot en français demandé */}
-          <div className="my-6 text-center">
+          <div className="my-5 text-center">
             <span className="text-xs text-slate-400 font-medium block mb-1">Mot en français</span>
             <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
               « {selectedFrenchTranslation} »
@@ -416,12 +455,12 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
             </form>
           )}
 
-          {/* Feedback : Bonne réponse */}
+          {/* Feedback : Bonne réponse avec Progression SRS */}
           {quizState === "correct" && (
             <div className="space-y-4 animate-pop-in">
               <div className="p-4 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-2xl">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-xl font-black text-emerald-900 dark:text-emerald-100">
@@ -435,9 +474,27 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                         <Volume2 className="w-4 h-4" />
                       </button>
                     </div>
-                    <p className="text-xs text-emerald-700 dark:text-emerald-300 font-medium mt-0.5">
-                      Bravo, c'est exact ! ({currentWord.successCount >= 3 ? "🎉 Mot Acquis !" : `Réussite ${currentWord.successCount}/3`})
-                    </p>
+
+                    {/* Détails du palier SRS atteint */}
+                    <div className="mt-1 text-xs text-emerald-800 dark:text-emerald-200 font-medium">
+                      {lastUpdatedWord?.isMastered ? (
+                        <p className="font-bold text-amber-800 dark:text-amber-200">
+                          🏆 Extraordinaire ! Mot validé 6 mois : Définitivement Acquis !
+                        </p>
+                      ) : lastUpdatedWord?.srsStage === 1 && !currentWord.learned ? (
+                        <p className="font-bold">
+                          🎉 1ʳᵉ acquisition validée ! Prochaine révision à J+1 (demain).
+                        </p>
+                      ) : lastUpdatedWord?.srsStage > 0 ? (
+                        <p>
+                          ✅ <b>{srsService.getStageInfo(lastUpdatedWord.srsStage).label}</b> validé ! Prochaine révision : <b>{srsService.formatRelativeReviewDate(lastUpdatedWord.nextReviewAt)?.text}</b>.
+                        </p>
+                      ) : (
+                        <p>
+                          Bravo ! Réussite {lastUpdatedWord?.successCount}/3 pour la 1ʳᵉ acquisition.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -453,7 +510,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
             </div>
           )}
 
-          {/* Feedback : Mauvaise réponse */}
+          {/* Feedback : Mauvaise réponse avec Rétrogradation Option B */}
           {quizState === "incorrect" && (
             <div className="space-y-4 animate-shake">
               <div className="p-4 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-2xl">
@@ -479,6 +536,23 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                       Votre réponse : <span className="line-through">{userAnswer}</span>
                     </p>
+
+                    {/* Explication de la rétrogradation SRS */}
+                    <div className="mt-2 pt-2 border-t border-rose-200 dark:border-rose-900/60 text-[11px] text-rose-800 dark:text-rose-300">
+                      {lastUpdatedWord?.srsStage > 0 ? (
+                        <span>
+                          ↩️ <b>Rétrogradation d'un palier :</b> replacé au <b>{srsService.getStageInfo(lastUpdatedWord.srsStage).label}</b> (Revue dès demain pour consolider).
+                        </span>
+                      ) : currentWord.learned ? (
+                        <span>
+                          ↩️ <b>Retour en apprentissage :</b> le mot repasse en apprentissage initial (2/3 ★).
+                        </span>
+                      ) : (
+                        <span>
+                          Continuez l'entraînement pour valider les 3 étoiles.
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

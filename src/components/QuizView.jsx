@@ -8,7 +8,9 @@ import {
   Volume2, 
   RotateCcw, 
   HelpCircle, 
-  Award
+  Award,
+  Mic,
+  MicOff
 } from "lucide-react";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 import { storageService } from "../services/storageService";
@@ -25,11 +27,18 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   const lastWordIdRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Reconnaissance vocale (Speech-to-Text)
+  const [isListening, setIsListening] = useState(false);
+  const [speechError, setSpeechError] = useState(null);
+  const recognitionRef = useRef(null);
+
   const [sessionScore, setSessionScore] = useState({ correct: 0, total: 0 });
 
   const candidateWords = words.filter((w) => includeLearned || !w.learned);
   const learnedCount = words.filter((w) => w.learned).length;
   const totalCount = words.length;
+
+  const isSpeechSupported = typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
   useEffect(() => {
     if (candidateWords.length > 0 && (!currentWord || !candidateWords.some(w => w.id === currentWord.id))) {
@@ -45,6 +54,86 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
   }, [quizState, currentWord]);
 
+  // Arrêter l'écoute lors du démontage du composant
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+      }
+    };
+  }, []);
+
+  const startListening = () => {
+    if (!isSpeechSupported) {
+      setSpeechError("La reconnaissance vocale n'est pas disponible sur ce navigateur.");
+      return;
+    }
+
+    try {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch {}
+      }
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setSpeechError(null);
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map(result => result[0].transcript)
+          .join("");
+        
+        if (transcript) {
+          // Enlever d'éventuels points ou espaces superflus ajoutés par la dictée
+          const cleaned = transcript.trim().replace(/\.$/, "");
+          setUserAnswer(cleaned);
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.warn("Speech recognition error:", event.error);
+        if (event.error === "not-allowed") {
+          setSpeechError("Accès au microphone refusé. Veuillez l'autoriser.");
+        } else if (event.error !== "no-speech") {
+          setSpeechError("Erreur d'écoute, veuillez réessayer.");
+        }
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 100);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error("Erreur lors de l'écoute vocale :", err);
+      setIsListening(false);
+    }
+  };
+
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+    setIsListening(false);
+  };
+
   const shuffleArray = (array) => {
     const arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {
@@ -55,6 +144,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   };
 
   const pickNextQuestion = () => {
+    stopListening();
     if (candidateWords.length === 0) {
       setCurrentWord(null);
       return;
@@ -127,6 +217,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
+    stopListening();
     if (quizState !== "answering" || !userAnswer.trim() || !currentWord) return;
 
     const userNorm = normalize(userAnswer, currentWord.part_of_speech);
@@ -267,13 +358,46 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
           
           {quizState === "answering" && (
             <form onSubmit={handleSubmit} className="space-y-3">
+              
+              {/* Bouton de réponse vocale au-dessus du champ de réponse */}
+              {isSpeechSupported && (
+                <div className="flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={isListening ? stopListening : startListening}
+                    className={`w-full py-2.5 px-3 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs ${
+                      isListening
+                        ? "bg-rose-500 hover:bg-rose-600 text-white animate-pulse ring-4 ring-rose-300 dark:ring-rose-900/50"
+                        : "bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/50"
+                    }`}
+                  >
+                    {isListening ? (
+                      <>
+                        <MicOff className="w-4 h-4 animate-bounce shrink-0" />
+                        <span>Écoute en cours... Parlez en anglais (cliquez pour terminer)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <span>🎤 Répondre à l'oral (Micro)</span>
+                      </>
+                    )}
+                  </button>
+                  {speechError && (
+                    <p className="text-[11px] text-rose-500 font-medium text-center">
+                      {speechError}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="relative">
                 <input
                   ref={inputRef}
                   type="text"
                   value={userAnswer}
                   onChange={(e) => setUserAnswer(e.target.value)}
-                  placeholder="Tapez le mot en anglais..."
+                  placeholder="Tapez ou dictez le mot en anglais..."
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck="false"

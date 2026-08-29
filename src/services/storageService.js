@@ -5,6 +5,7 @@ const STORAGE_KEY = "quiz_anglais_vocab_v2";
 const STATS_KEY = "quiz_anglais_stats_v2";
 
 export const storageService = {
+  // Lecture synchrone immédiate depuis le cache local
   getWords: () => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -13,7 +14,7 @@ export const storageService = {
         return initialWords;
       }
       const parsed = JSON.parse(stored);
-      // Nettoyer d'éventuels anciens exemples résiduels
+      // Nettoyer d'éventuels anciens formats
       return parsed.map(({ example_english, example_french, ...rest }) => rest);
     } catch (e) {
       console.error("Erreur lors de la lecture du LocalStorage", e);
@@ -21,42 +22,98 @@ export const storageService = {
     }
   },
 
-  saveWords: (words, triggerSync = true) => {
+  // Sauvegarde dans le cache local
+  saveWordsLocally: (words) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(words));
-      if (triggerSync) {
-        storageService.triggerAutoSync();
-      }
     } catch (e) {
-      console.error("Erreur lors de la sauvegarde du LocalStorage", e);
+      console.error("Erreur lors de la sauvegarde locale", e);
     }
   },
 
-  // Déclenche une synchronisation en arrière-plan vers Supabase
-  triggerAutoSync: () => {
+  // Rafraîchir les mots depuis Supabase et mettre à jour le cache local
+  refreshFromSupabase: async () => {
     try {
-      const words = storageService.getWords();
-      const stats = storageService.getGlobalStats();
-      syncService.pushData({ words, stats, exportedAt: new Date().toISOString() });
+      const res = await syncService.fetchWords();
+      if (res.success && Array.isArray(res.words)) {
+        // Si Supabase est vide mais que nous avons des mots locaux (ex: les 80 mots existants),
+        // on migre automatiquement les mots locaux vers Supabase !
+        const localWords = storageService.getWords();
+        if (res.words.length === 0 && localWords.length > 0) {
+          const stats = storageService.getGlobalStats();
+          await syncService.migrateWords(localWords, stats);
+          return { words: localWords, migrated: true, count: localWords.length };
+        }
+
+        // Sinon, la base Supabase est la source de vérité
+        storageService.saveWordsLocally(res.words);
+
+        // Récupérer également les stats
+        const statsRes = await syncService.fetchStats();
+        if (statsRes.success && statsRes.stats) {
+          localStorage.setItem(STATS_KEY, JSON.stringify(statsRes.stats));
+        }
+
+        return { words: res.words, migrated: false };
+      }
+      return { words: storageService.getWords(), error: res.error };
     } catch (err) {
-      console.error("Erreur lors de la synchronisation automatique :", err);
+      console.error("Erreur lors du rafraîchissement Supabase :", err);
+      return { words: storageService.getWords(), error: err.message };
     }
   },
 
-  // Appliquer des données reçues du Cloud (sans réémettre de push)
-  applyRemoteData: (remoteData) => {
-    if (!remoteData || !Array.isArray(remoteData.words)) return false;
-    
+  // Appliquer des modifications reçues en temps réel depuis Supabase
+  applyRemoteRealtimeEvent: (event) => {
     try {
-      const cleaned = remoteData.words.map(({ example_english, example_french, ...rest }) => rest);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-      if (remoteData.stats) {
-        localStorage.setItem(STATS_KEY, JSON.stringify(remoteData.stats));
+      if (!event) return storageService.getWords();
+
+      if (event.type === "words_change" && event.payload) {
+        const { eventType, new: newRow, old: oldRow } = event.payload;
+        let words = storageService.getWords();
+
+        if (eventType === "INSERT" && newRow) {
+          const exists = words.some(w => w.id === newRow.id);
+          if (!exists) {
+            words = [{
+              id: String(newRow.id),
+              english_word: newRow.english_word,
+              part_of_speech: newRow.part_of_speech,
+              french_translations: newRow.french_translations || [],
+              successCount: newRow.success_count || 0,
+              learned: Boolean(newRow.learned),
+              lastAnswered: newRow.last_answered || undefined,
+              lastCorrect: newRow.last_correct !== null ? newRow.last_correct : undefined,
+              createdAt: newRow.created_at || new Date().toISOString()
+            }, ...words];
+          }
+        } else if (eventType === "UPDATE" && newRow) {
+          words = words.map(w => w.id === newRow.id ? {
+            ...w,
+            english_word: newRow.english_word,
+            part_of_speech: newRow.part_of_speech,
+            french_translations: newRow.french_translations || [],
+            successCount: newRow.success_count || 0,
+            learned: Boolean(newRow.learned),
+            lastAnswered: newRow.last_answered || undefined,
+            lastCorrect: newRow.last_correct !== null ? newRow.last_correct : undefined
+          } : w);
+        } else if (eventType === "DELETE" && oldRow) {
+          words = words.filter(w => w.id !== oldRow.id);
+        }
+
+        storageService.saveWordsLocally(words);
+        return words;
       }
-      return true;
-    } catch (e) {
-      console.error("Erreur lors de l'application des données distantes :", e);
-      return false;
+
+      if (event.type === "stats_change" && event.data) {
+        localStorage.setItem(STATS_KEY, JSON.stringify(event.data));
+      }
+
+      return storageService.getWords();
+    } catch (err) {
+      console.error("Erreur application événement temps réel :", err);
+      return storageService.getWords();
     }
   },
 
@@ -77,7 +134,7 @@ export const storageService = {
   },
 
   // Ajouter un mot
-  addWord: (newWordData) => {
+  addWord: async (newWordData) => {
     const words = storageService.getWords();
     const duplicate = storageService.findDuplicate(newWordData.english_word, newWordData.part_of_speech);
     
@@ -97,8 +154,13 @@ export const storageService = {
       createdAt: new Date().toISOString()
     };
 
+    // 1. Sauvegarde locale immédiate (optimiste)
     const updated = [word, ...words];
-    storageService.saveWords(updated);
+    storageService.saveWordsLocally(updated);
+
+    // 2. Insertion en base de données Supabase
+    syncService.insertWord(word);
+
     return { success: true, word };
   },
 
@@ -106,7 +168,11 @@ export const storageService = {
   updateWord: (id, updates) => {
     const words = storageService.getWords();
     const updated = words.map((w) => (w.id === id ? { ...w, ...updates } : w));
-    storageService.saveWords(updated);
+    storageService.saveWordsLocally(updated);
+
+    // Synchronisation en base de données Supabase
+    syncService.updateWord(id, updates);
+
     return updated;
   },
 
@@ -114,7 +180,11 @@ export const storageService = {
   deleteWord: (id) => {
     const words = storageService.getWords();
     const updated = words.filter((w) => w.id !== id);
-    storageService.saveWords(updated);
+    storageService.saveWordsLocally(updated);
+
+    // Suppression en base de données Supabase
+    syncService.deleteWord(id);
+
     return updated;
   },
 
@@ -140,9 +210,17 @@ export const storageService = {
       return updatedWord;
     });
 
-    storageService.saveWords(updated, false); // Ne pas déclencher le push tout de suite
-    storageService.recordGlobalStats(isCorrect, true); // Déclenchera le push avec stats mises à jour
+    storageService.saveWordsLocally(updated);
+    if (updatedWord) {
+      syncService.updateWord(id, {
+        successCount: updatedWord.successCount,
+        learned: updatedWord.learned,
+        lastAnswered: updatedWord.lastAnswered,
+        lastCorrect: updatedWord.lastCorrect
+      });
+    }
 
+    storageService.recordGlobalStats(isCorrect);
     return { words: updated, updatedWord };
   },
 
@@ -152,7 +230,8 @@ export const storageService = {
     const updated = words.map((w) => 
       w.id === id ? { ...w, successCount: 0, learned: false } : w
     );
-    storageService.saveWords(updated);
+    storageService.saveWordsLocally(updated);
+    syncService.updateWord(id, { successCount: 0, learned: false });
     return updated;
   },
 
@@ -164,13 +243,16 @@ export const storageService = {
       learned: false,
       lastAnswered: undefined
     }));
-    storageService.saveWords(updated);
+    storageService.saveWordsLocally(updated);
+    
+    // Mettre à jour dans Supabase
+    syncService.migrateWords(updated);
     return updated;
   },
 
-  restoreInitialWords: () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(initialWords));
-    storageService.triggerAutoSync();
+  restoreInitialWords: async () => {
+    storageService.saveWordsLocally(initialWords);
+    await syncService.migrateWords(initialWords);
     return initialWords;
   },
 
@@ -183,7 +265,7 @@ export const storageService = {
     }
   },
 
-  recordGlobalStats: (isCorrect, triggerSync = true) => {
+  recordGlobalStats: (isCorrect) => {
     const stats = storageService.getGlobalStats();
     stats.totalAnswered = (stats.totalAnswered || 0) + 1;
     if (isCorrect) {
@@ -194,9 +276,7 @@ export const storageService = {
       stats.streak = 0;
     }
     localStorage.setItem(STATS_KEY, JSON.stringify(stats));
-    if (triggerSync) {
-      storageService.triggerAutoSync();
-    }
+    syncService.saveStats(stats);
   },
 
   exportData: () => {
@@ -205,16 +285,17 @@ export const storageService = {
     return JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), words, stats }, null, 2);
   },
 
-  importData: (jsonString) => {
+  importData: async (jsonString) => {
     try {
       const data = JSON.parse(jsonString);
       if (Array.isArray(data.words)) {
         const cleaned = data.words.map(({ example_english, example_french, ...rest }) => rest);
-        storageService.saveWords(cleaned);
+        storageService.saveWordsLocally(cleaned);
         if (data.stats) {
           localStorage.setItem(STATS_KEY, JSON.stringify(data.stats));
         }
-        storageService.triggerAutoSync();
+        // Migrer les mots importés vers Supabase
+        await syncService.migrateWords(cleaned, data.stats || null);
         return { success: true, count: cleaned.length };
       }
       return { success: false, error: "Format JSON invalide (clé 'words' manquante)" };

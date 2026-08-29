@@ -12,13 +12,13 @@ import {
   Bot,
   ExternalLink,
   Cloud,
-  CloudCheck,
   CloudOff,
   RefreshCw,
   QrCode as QrCodeIcon,
   Database,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ArrowUpRight
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { storageService } from "../services/storageService";
@@ -27,7 +27,6 @@ import { syncService } from "../services/syncService";
 
 export function SettingsView({ words, onWordsUpdate }) {
   const [copied, setCopied] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [notification, setNotification] = useState(null);
 
@@ -39,9 +38,7 @@ export function SettingsView({ words, onWordsUpdate }) {
   const [syncConfig, setSyncConfig] = useState(syncService.getConfig());
   const [supabaseUrlInput, setSupabaseUrlInput] = useState(syncConfig.url || "");
   const [supabaseKeyInput, setSupabaseKeyInput] = useState(syncConfig.anonKey || "");
-  const [syncCodeInput, setSyncCodeInput] = useState(syncConfig.syncCode || "");
   const [syncStatus, setSyncStatus] = useState(syncService.status);
-  const [lastSynced, setLastSynced] = useState(syncService.lastSyncedAt);
   const [showQrModal, setShowQrModal] = useState(false);
   const [showSupabaseConfig, setShowSupabaseConfig] = useState(!syncConfig.url || !syncConfig.anonKey);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -53,9 +50,8 @@ export function SettingsView({ words, onWordsUpdate }) {
     setApiKeyInput(key);
     setApiKeySaved(Boolean(key));
 
-    const unsub = syncService.onStatusChange((status, timestamp) => {
+    const unsub = syncService.onStatusChange((status) => {
       setSyncStatus(status);
-      setLastSynced(timestamp);
     });
 
     return () => unsub();
@@ -72,79 +68,100 @@ export function SettingsView({ words, onWordsUpdate }) {
     showNotif(apiKeyInput.trim() ? "Clé API IA enregistrée !" : "Clé API supprimée (Moteur intégré actif)");
   };
 
-  const handleSaveSupabaseConfig = () => {
+  const handleSaveSupabaseConfig = async () => {
     const updated = syncService.saveConfig({
       url: supabaseUrlInput.trim(),
-      anonKey: supabaseKeyInput.trim(),
-      syncCode: syncCodeInput.trim() || syncConfig.syncCode
+      anonKey: supabaseKeyInput.trim()
     });
     setSyncConfig(updated);
     showNotif("Configuration Supabase enregistrée !");
-  };
-
-  const handleManualPush = async () => {
-    setIsSyncing(true);
-    const wordsData = storageService.getWords();
-    const statsData = storageService.getGlobalStats();
-    const res = await syncService.pushData({
-      words: wordsData,
-      stats: statsData,
-      exportedAt: new Date().toISOString()
-    });
-    setIsSyncing(false);
-
-    if (res.success) {
-      showNotif("Données synchronisées vers le Cloud avec succès !");
-    } else {
-      showNotif(`Erreur de synchronisation : ${res.error || "Vérifiez vos réglages Supabase"}`, "error");
-    }
-  };
-
-  const handleManualPull = async () => {
-    setIsSyncing(true);
-    const res = await syncService.pullData(syncCodeInput.trim());
-    setIsSyncing(false);
-
-    if (res.success) {
-      if (res.data) {
-        storageService.applyRemoteData(res.data);
-        onWordsUpdate(storageService.getWords());
-        showNotif("Données du Cloud récupérées et appliquées !");
-      } else {
-        showNotif("Aucune donnée trouvée sur le Cloud pour ce code.", "error");
+    
+    // Tester la connexion et rafraîchir
+    const test = await syncService.testConnection();
+    if (test.connected) {
+      showNotif("Connexion réussie à Supabase !");
+      const res = await storageService.refreshFromSupabase();
+      if (res && res.words) {
+        onWordsUpdate(res.words);
       }
     } else {
-      showNotif(`Erreur : ${res.error || "Impossible de récupérer les données"}`, "error");
+      showNotif(`Connexion échouée : ${test.error}`, "error");
     }
   };
 
-  const handleCopySyncCode = async () => {
-    try {
-      await navigator.clipboard.writeText(syncConfig.syncCode);
-      setCopiedCode(true);
-      showNotif("Code de synchronisation copié !");
-      setTimeout(() => setCopiedCode(false), 2000);
-    } catch {
-      showNotif("Code copié", "success");
+  const handleMigrateToSupabase = async () => {
+    setIsSyncing(true);
+    const localWords = storageService.getWords();
+    const localStats = storageService.getGlobalStats();
+    
+    const res = await syncService.migrateWords(localWords, localStats);
+    setIsSyncing(false);
+
+    if (res.success) {
+      showNotif(`✅ ${res.count} mots migrés avec succès dans la table Supabase !`);
+      const refreshed = await storageService.refreshFromSupabase();
+      if (refreshed && refreshed.words) {
+        onWordsUpdate(refreshed.words);
+      }
+    } else {
+      showNotif(`Erreur de migration : ${res.error || "Vérifiez vos réglages Supabase"}`, "error");
     }
   };
 
-  const sqlScript = `-- 1. Création de la table de synchronisation
-create table if not exists public.quiz_sync (
+  const handleRefreshFromCloud = async () => {
+    setIsSyncing(true);
+    const res = await storageService.refreshFromSupabase();
+    setIsSyncing(false);
+
+    if (res && res.words) {
+      onWordsUpdate(res.words);
+      showNotif(`Données rechargées depuis Supabase (${res.words.length} mots) !`);
+    } else {
+      showNotif(`Erreur : ${res.error || "Impossible de récupérer les mots"}`, "error");
+    }
+  };
+
+  const sqlScript = `-- 1. Table des mots de vocabulaire
+create table if not exists public.words (
   id text primary key,
-  data jsonb not null,
+  english_word text not null,
+  part_of_speech text default 'noun',
+  french_translations jsonb not null default '[]'::jsonb,
+  success_count integer default 0,
+  learned boolean default false,
+  last_answered timestamptz,
+  last_correct boolean,
+  created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
--- 2. Activer la synchronisation temps réel
-alter publication supabase_realtime add table public.quiz_sync;
+-- Index pour recherche rapide et dédoublonnage
+create index if not exists idx_words_english on public.words (lower(english_word));
 
--- 3. Activer la sécurité RLS
-alter table public.quiz_sync enable row level security;
+-- 2. Table des statistiques globales
+create table if not exists public.quiz_stats (
+  id text primary key default 'global_stats',
+  total_answered integer default 0,
+  correct_answers integer default 0,
+  streak integer default 0,
+  max_streak integer default 0,
+  updated_at timestamptz default now()
+);
 
--- 4. Autoriser la lecture et l'écriture avec la clé anon
-drop policy if exists "Allow public read/write" on public.quiz_sync;
-create policy "Allow public read/write" on public.quiz_sync
+-- 3. Activer le Temps Réel (Realtime)
+alter publication supabase_realtime add table public.words;
+alter publication supabase_realtime add table public.quiz_stats;
+
+-- 4. Activer Row Level Security (RLS) et autoriser l'accès avec la clé publique (anon)
+alter table public.words enable row level security;
+alter table public.quiz_stats enable row level security;
+
+drop policy if exists "Allow public access on words" on public.words;
+create policy "Allow public access on words" on public.words
+  for all using (true) with check (true);
+
+drop policy if exists "Allow public access on quiz_stats" on public.quiz_stats;
+create policy "Allow public access on quiz_stats" on public.quiz_stats
   for all using (true) with check (true);`;
 
   const handleCopySQL = async () => {
@@ -182,18 +199,18 @@ create policy "Allow public read/write" on public.quiz_sync
     }
   };
 
-  const handleFileImport = (e) => {
+  const handleFileImport = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const content = event.target?.result;
       if (typeof content === "string") {
-        const res = storageService.importData(content);
+        const res = await storageService.importData(content);
         if (res.success) {
           onWordsUpdate(storageService.getWords());
-          showNotif(`${res.count} mots restaurés avec succès !`);
+          showNotif(`${res.count} mots restaurés et enregistrés dans Supabase !`);
         } else {
           showNotif(`Erreur d'import : ${res.error}`, "error");
         }
@@ -211,9 +228,9 @@ create policy "Allow public read/write" on public.quiz_sync
     }
   };
 
-  const handleRestoreDefaults = () => {
+  const handleRestoreDefaults = async () => {
     if (window.confirm("Rétablir la liste initiale par défaut ?")) {
-      const initial = storageService.restoreInitialWords();
+      const initial = await storageService.restoreInitialWords();
       onWordsUpdate(initial);
       showNotif("Vocabulaire initial restauré !");
     }
@@ -226,7 +243,7 @@ create policy "Allow public read/write" on public.quiz_sync
       
       <div>
         <h1 className="text-2xl font-black text-slate-900 dark:text-white">Réglages</h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">Synchronisation iPhone / Mac, IA et sauvegardes</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Base de données Supabase, iPhone / Mac et sauvegardes</p>
       </div>
 
       {notification && (
@@ -246,7 +263,7 @@ create policy "Allow public read/write" on public.quiz_sync
           <div className="flex items-center gap-2">
             <Cloud className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
             <h2 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-              Synchronisation iPhone & Mac
+              Base de données Cloud (Supabase)
             </h2>
           </div>
           <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
@@ -261,76 +278,61 @@ create policy "Allow public read/write" on public.quiz_sync
             <span className={`w-1.5 h-1.5 rounded-full ${
               isSupabaseConfigured ? "bg-emerald-500 animate-pulse" : "bg-slate-400"
             }`} />
-            {isSupabaseConfigured ? (syncStatus === "syncing" ? "Synchronisation..." : "Actif en direct") : "À configurer"}
+            {isSupabaseConfigured ? (syncStatus === "syncing" ? "Synchronisation..." : "Connecté en direct") : "À configurer"}
           </span>
         </div>
 
         <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-          Vos mots ajoutés et vos scores se synchronisent automatiquement en temps réel entre votre iPhone et votre Mac grâce à votre base Supabase gratuite.
+          Vos mots de vocabulaire sont stockés et synchronisés directement dans votre base de données Supabase.
         </p>
 
-        {/* Code de Synchronisation Partagé */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2">
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-medium">
-            <span>Votre Code de Synchronisation (Sync Key) :</span>
-            <button
-              onClick={() => setShowQrModal(!showQrModal)}
-              className="text-indigo-600 dark:text-indigo-400 flex items-center gap-1 font-semibold hover:underline"
-            >
-              <QrCodeIcon className="w-3.5 h-3.5" />
-              <span>{showQrModal ? "Masquer QR" : "Afficher QR"}</span>
-            </button>
+        {/* Boutons d'action pour la migration et la synchronisation */}
+        <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+          <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 font-medium">
+            <span>État : <b>{words.length} mots</b> chargés</span>
+            {isSupabaseConfigured && (
+              <button
+                onClick={() => setShowQrModal(!showQrModal)}
+                className="text-indigo-600 dark:text-indigo-400 flex items-center gap-1 font-semibold hover:underline"
+              >
+                <QrCodeIcon className="w-3.5 h-3.5" />
+                <span>{showQrModal ? "Masquer QR" : "Jumeler iPhone"}</span>
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={syncCodeInput}
-              onChange={(e) => setSyncCodeInput(e.target.value.toLowerCase().trim())}
-              placeholder="quiz-xxxxxx"
-              className="flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-mono font-bold text-indigo-600 dark:text-indigo-400 tracking-wider text-center uppercase"
-            />
-            <button
-              onClick={handleCopySyncCode}
-              title="Copier le code"
-              className="p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-100 text-slate-700 dark:text-slate-300 transition"
-            >
-              <Copy className="w-4 h-4" />
-            </button>
-          </div>
-
-          {showQrModal && (
+          {showQrModal && isSupabaseConfigured && (
             <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col items-center gap-3 animate-fade-in">
               <div className="p-3 bg-white rounded-2xl shadow-xs border border-slate-100">
                 <QRCodeSVG 
-                  value={syncService.getPairingUrl() || syncCodeInput || syncConfig.syncCode} 
+                  value={syncService.getPairingUrl()} 
                   size={180}
                   level="M" 
                 />
               </div>
               <p className="text-xs text-slate-600 dark:text-slate-300 text-center max-w-xs font-medium">
-                📷 <b>Scannez ce QR Code avec l'appareil photo de votre iPhone</b> pour ouvrir le quiz et synchroniser automatiquement la connexion Supabase et vos données !
+                📷 <b>Scannez ce QR Code avec votre iPhone</b> pour ouvrir directement le quiz avec la connexion Supabase et vos {words.length} mots !
               </p>
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-2 pt-1">
+          <div className="grid grid-cols-1 gap-2 pt-1">
             <button
-              onClick={handleManualPush}
+              onClick={handleMigrateToSupabase}
               disabled={isSyncing || !isSupabaseConfigured}
-              className="py-2 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition"
+              className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin" : ""}`} />
-              <span>Envoyer au Cloud</span>
+              <span>Transférer / Mettre à jour tous les mots vers Supabase ({words.length})</span>
             </button>
 
             <button
-              onClick={handleManualPull}
+              onClick={handleRefreshFromCloud}
               disabled={isSyncing || !isSupabaseConfigured}
-              className="py-2 px-3 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 disabled:opacity-50 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition"
+              className="w-full py-2 px-3 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 disabled:opacity-50 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Récupérer du Cloud</span>
+              <Download className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Recharger les données depuis Supabase</span>
             </button>
           </div>
         </div>
@@ -343,7 +345,7 @@ create policy "Allow public read/write" on public.quiz_sync
           >
             <span className="flex items-center gap-1.5">
               <Database className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Paramètres de connexion Supabase (Projet Gratuit)</span>
+              <span>Configuration Supabase & Script SQL</span>
             </span>
             {showSupabaseConfig ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
@@ -351,11 +353,11 @@ create policy "Allow public read/write" on public.quiz_sync
           {showSupabaseConfig && (
             <div className="space-y-3 pt-3 animate-fade-in">
               <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/50 dark:border-indigo-800/30 rounded-2xl text-[11px] text-indigo-950 dark:text-indigo-200 space-y-2">
-                <p className="font-semibold">⚡ Comment configurer Supabase en 2 minutes :</p>
+                <p className="font-semibold">⚡ Instructions pour initialiser votre base Supabase :</p>
                 <ol className="list-decimal list-inside space-y-1 text-slate-600 dark:text-slate-300">
-                  <li>Créez un projet gratuit sur <a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline font-semibold">supabase.com</a>.</li>
-                  <li>Dans Supabase, ouvrez <b>SQL Editor</b>, collez le script ci-dessous et cliquez sur <b>Run</b>.</li>
-                  <li>Dans <b>Project Settings &gt; API</b>, copiez l'<b>URL du projet</b> et la <b>clé anon public</b>.</li>
+                  <li>Ouvrez votre projet sur <a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline font-semibold">supabase.com</a>.</li>
+                  <li>Allez dans <b>SQL Editor</b>, collez le script ci-dessous et cliquez sur <b>Run</b>.</li>
+                  <li>Dans <b>Project Settings &gt; API</b>, récupérez l'<b>URL</b> et la <b>clé anon public</b>.</li>
                 </ol>
                 <button
                   onClick={handleCopySQL}

@@ -7,7 +7,7 @@ import { AddWordModal } from "./components/AddWordModal";
 import { Navigation } from "./components/Navigation";
 import { storageService } from "./services/storageService";
 import { syncService } from "./services/syncService";
-import { Cloud, CloudCheck, RefreshCw } from "lucide-react";
+import { Cloud, CloudOff, RefreshCw } from "lucide-react";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("quiz"); // "quiz" | "list" | "stats" | "settings"
@@ -17,24 +17,21 @@ export default function App() {
 
   // Charger les mots au démarrage et écouter les changements
   useEffect(() => {
-    // 1. Chargement initial local
-    const loadedWords = storageService.getWords();
-    setWords(loadedWords);
+    // 1. Chargement instantané depuis le cache local (aucun écran blanc)
+    const initialWords = storageService.getWords();
+    setWords(initialWords);
 
-    // 2. Synchronisation initiale avec le Cloud si configuré
-    syncService.pullData().then((res) => {
-      if (res && res.success && res.data) {
-        storageService.applyRemoteData(res.data);
-        setWords(storageService.getWords());
+    // 2. Synchronisation / Rafraîchissement depuis la table Supabase
+    storageService.refreshFromSupabase().then((res) => {
+      if (res && res.words) {
+        setWords(res.words);
       }
     });
 
-    // 3. Écoute des mises à jour distantes en direct (Realtime)
-    const unsubRemote = syncService.onRemoteUpdate((remoteData) => {
-      if (remoteData) {
-        storageService.applyRemoteData(remoteData);
-        setWords(storageService.getWords());
-      }
+    // 3. Écoute des mises à jour distantes en direct (Realtime PostgreSQL)
+    const unsubRemote = syncService.onRemoteUpdate((event) => {
+      const updated = storageService.applyRemoteRealtimeEvent(event);
+      setWords([...updated]);
     });
 
     // 4. Écoute du statut de synchronisation
@@ -52,7 +49,7 @@ export default function App() {
     setWords(updatedWords);
   };
 
-  const handleWordAdded = (newWord) => {
+  const handleWordAdded = () => {
     const loaded = storageService.getWords();
     setWords(loaded);
   };
@@ -78,13 +75,21 @@ export default function App() {
             {isSyncConfigured && (
               <button 
                 onClick={() => setActiveTab("settings")}
-                title={syncStatus === "syncing" ? "Synchronisation en cours..." : "Synchronisation cloud active"}
+                title={
+                  syncStatus === "syncing" 
+                    ? "Synchronisation avec Supabase en cours..." 
+                    : syncStatus === "synced" 
+                    ? "Base Supabase connectée en temps réel" 
+                    : "Erreur ou hors ligne"
+                }
                 className="flex items-center text-indigo-600 dark:text-indigo-400 p-0.5 hover:opacity-80 transition"
               >
                 {syncStatus === "syncing" ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
-                ) : (
+                ) : syncStatus === "synced" ? (
                   <Cloud className="w-3.5 h-3.5 text-emerald-500" />
+                ) : (
+                  <CloudOff className="w-3.5 h-3.5 text-rose-500" />
                 )}
               </button>
             )}

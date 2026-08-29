@@ -35,38 +35,96 @@ export const translationService = {
   },
 
   /**
+   * Récupère la liste des modèles disponibles pour la clé API
+   */
+  getAvailableModels: async (apiKey) => {
+    const key = (apiKey || "").trim();
+    if (!key) return [];
+
+    // 1. Interroger dynamiquement l'API Google pour connaître les modèles activés pour cette clé
+    for (const apiVer of ["v1beta", "v1"]) {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/${apiVer}/models?key=${key}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.models) && data.models.length > 0) {
+            const available = data.models
+              .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+              .map(m => ({
+                id: m.name.replace(/^models\//, ""),
+                version: apiVer,
+                displayName: m.displayName || m.name
+              }));
+
+            if (available.length > 0) {
+              // Privilégier les modèles flash rapides
+              available.sort((a, b) => {
+                const aFlash = a.id.includes("flash") ? 1 : 0;
+                const bFlash = b.id.includes("flash") ? 1 : 0;
+                return bFlash - aFlash;
+              });
+              return available;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(`Erreur list models ${apiVer}:`, e);
+      }
+    }
+
+    // 2. Liste de repli éprouvée (supportant v1beta et v1)
+    return [
+      { id: "gemini-1.5-flash", version: "v1beta" },
+      { id: "gemini-1.5-flash", version: "v1" },
+      { id: "gemini-1.5-flash-latest", version: "v1beta" },
+      { id: "gemini-2.0-flash", version: "v1beta" },
+      { id: "gemini-2.0-flash-exp", version: "v1beta" },
+      { id: "gemini-1.5-pro", version: "v1beta" },
+      { id: "gemini-1.5-pro", version: "v1" },
+      { id: "gemini-pro", version: "v1" }
+    ];
+  },
+
+  /**
    * Tester la validité d'une clé API Gemini
    */
   testGeminiKey: async (apiKey) => {
     const key = (apiKey || "").trim();
     if (!key) return { success: false, error: "Veuillez saisir une clé API." };
 
-    const testModels = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"];
-    let lastErr = "";
-
-    for (const model of testModels) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: "Hello" }] }]
-          })
-        });
-
-        if (response.ok) {
-          return { success: true, model };
-        } else {
-          const err = await response.json().catch(() => ({}));
-          lastErr = err.error?.message || `Erreur HTTP ${response.status}`;
-        }
-      } catch (e) {
-        lastErr = e.message;
+    try {
+      const models = await translationService.getAvailableModels(key);
+      if (models.length === 0) {
+        return { success: false, error: "Aucun modèle Gemini compatible trouvé pour cette clé." };
       }
-    }
 
-    return { success: false, error: lastErr || "Clé API invalide ou indisponible" };
+      let lastErr = "";
+      for (const m of models.slice(0, 5)) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/${m.version}/models/${m.id}:generateContent?key=${key}`;
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: "Hello" }] }]
+            })
+          });
+
+          if (response.ok) {
+            return { success: true, model: m.id };
+          } else {
+            const err = await response.json().catch(() => ({}));
+            lastErr = err.error?.message || `Erreur HTTP ${response.status}`;
+          }
+        } catch (e) {
+          lastErr = e.message;
+        }
+      }
+
+      return { success: false, error: lastErr || "Clé API invalide ou modèles inaccessibles" };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   },
 
   /**
@@ -92,21 +150,16 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
   "notes": "..."
 }`;
 
-    // Modèles compatibles et actuels de l'API Google
-    const models = [
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
-      "gemini-1.5-flash",
-      "gemini-1.5-pro"
-    ];
+    const key = apiKey.trim();
+    const availableModels = await translationService.getAvailableModels(key);
 
     let lastError = null;
     let data = null;
-    let usedModel = models[0];
+    let usedModel = null;
 
-    for (const model of models) {
+    for (const m of availableModels) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`;
+        const url = `https://generativelanguage.googleapis.com/${m.version}/models/${m.id}:generateContent?key=${key}`;
         const response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -120,7 +173,7 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
 
         if (response.ok) {
           data = await response.json();
-          usedModel = model;
+          usedModel = m.id;
           break;
         } else {
           const err = await response.json().catch(() => ({}));
@@ -132,7 +185,7 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
     }
 
     if (!data) {
-      throw new Error(`Échec de l'appel Gemini : ${lastError}`);
+      throw new Error(lastError || "Échec de l'appel aux modèles Gemini");
     }
 
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;

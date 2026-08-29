@@ -1,34 +1,82 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { 
   Search, 
   Volume2, 
   Trash2, 
   RotateCcw, 
   CheckCircle2, 
-  Plus
+  Plus,
+  X
 } from "lucide-react";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 import { storageService } from "../services/storageService";
 
+// Fonction utilitaire pour nettoyer et obtenir la clé de tri (sans 'to ', 'a ', 'an ', 'the ')
+export function getSortKey(word) {
+  if (!word || !word.english_word) return "";
+  let clean = word.english_word.trim().toLowerCase();
+  
+  // Enlever les prépositions et articles initiaux
+  clean = clean.replace(/^(to\s+|a\s+|an\s+|the\s+)/i, "").trim();
+  
+  // Enlever d'éventuels caractères spéciaux au début
+  clean = clean.replace(/^[^a-z0-9]+/i, "");
+  
+  return clean;
+}
+
+// Fonction pour obtenir la première lettre effective du mot
+export function getFirstLetter(word) {
+  const key = getSortKey(word);
+  if (!key) return "#";
+  const firstChar = key[0].toUpperCase();
+  return /^[A-Z]$/.test(firstChar) ? firstChar : "#";
+}
+
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
 export function WordList({ words, onWordsUpdate, onOpenAdd }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState("all"); // "all" | "learning" | "learned"
+  const [selectedLetter, setSelectedLetter] = useState(null); // null = toutes les lettres, ou 'A', 'B', etc.
 
-  // Filtrage des mots
-  const filteredWords = words.filter((w) => {
-    const q = searchQuery.toLowerCase().trim();
-    const matchesQuery =
-      !q ||
-      w.english_word?.toLowerCase().includes(q) ||
-      w.french_translations?.some((t) => t.toLowerCase().includes(q));
+  // Calcul du nombre de mots par lettre
+  const letterCounts = useMemo(() => {
+    const counts = {};
+    words.forEach((w) => {
+      const letter = getFirstLetter(w);
+      counts[letter] = (counts[letter] || 0) + 1;
+    });
+    return counts;
+  }, [words]);
 
-    if (!matchesQuery) return false;
+  // Tri alphabétique (ignorant les prépositions "to", "a", "an", "the") et filtrage
+  const filteredWords = useMemo(() => {
+    // 1. Trier tous les mots dans l'ordre alphabétique
+    const sorted = [...words].sort((a, b) => {
+      const keyA = getSortKey(a);
+      const keyB = getSortKey(b);
+      return keyA.localeCompare(keyB, "en", { sensitivity: "base" });
+    });
 
-    if (filterType === "learning" && w.learned) return false;
-    if (filterType === "learned" && !w.learned) return false;
+    // 2. Filtrer par recherche, statut et lettre
+    return sorted.filter((w) => {
+      const q = searchQuery.toLowerCase().trim();
+      const matchesQuery =
+        !q ||
+        w.english_word?.toLowerCase().includes(q) ||
+        w.french_translations?.some((t) => t.toLowerCase().includes(q));
 
-    return true;
-  });
+      if (!matchesQuery) return false;
+
+      if (filterType === "learning" && w.learned) return false;
+      if (filterType === "learned" && !w.learned) return false;
+
+      if (selectedLetter && getFirstLetter(w) !== selectedLetter) return false;
+
+      return true;
+    });
+  }, [words, searchQuery, filterType, selectedLetter]);
 
   const learnedCount = words.filter((w) => w.learned).length;
   const learningCount = words.length - learnedCount;
@@ -59,14 +107,14 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
   };
 
   return (
-    <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-2 pb-24 space-y-4 animate-fade-in">
+    <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-2 pb-24 space-y-3.5 animate-fade-in">
       
       {/* En-tête de la page */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-black text-slate-900 dark:text-white">Vocabulaire</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            {words.length} mots au total • {learnedCount} acquis
+            {words.length} mots classés par ordre alphabétique • {learnedCount} acquis
           </p>
         </div>
         <button
@@ -86,12 +134,20 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Rechercher en français ou anglais..."
-          className="w-full pl-9 pr-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
+          className="w-full pl-9 pr-9 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
         />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      {/* Filtres par statut */}
-      <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+      {/* Filtres par statut (Tous / En cours / Acquis) */}
+      <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
         <button
           onClick={() => setFilterType("all")}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
@@ -124,12 +180,91 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
         </button>
       </div>
 
+      {/* Index Alphabétique (A-Z) */}
+      <div className="bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
+        <div className="flex items-center justify-between mb-1.5 px-1">
+          <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+            Index Alphabétique
+          </span>
+          {selectedLetter && (
+            <button
+              onClick={() => setSelectedLetter(null)}
+              className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5"
+            >
+              <span>Afficher tout (A-Z)</span>
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        {/* Barre de défilement des lettres */}
+        <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-none">
+          <button
+            onClick={() => setSelectedLetter(null)}
+            className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition ${
+              selectedLetter === null
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200"
+            }`}
+          >
+            Tous
+          </button>
+
+          {ALPHABET.map((letter) => {
+            const count = letterCounts[letter] || 0;
+            const isSelected = selectedLetter === letter;
+            const hasWords = count > 0;
+
+            return (
+              <button
+                key={letter}
+                onClick={() => setSelectedLetter(isSelected ? null : letter)}
+                disabled={!hasWords}
+                className={`w-7 h-7 rounded-lg text-xs font-bold shrink-0 flex items-center justify-center transition relative ${
+                  isSelected
+                    ? "bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400"
+                    : hasWords
+                    ? "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-950"
+                    : "text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40"
+                }`}
+                title={hasWords ? `${count} mot${count > 1 ? "s" : ""}` : "Aucun mot"}
+              >
+                <span>{letter}</span>
+                {hasWords && !isSelected && (
+                  <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-indigo-500 rounded-full" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Résumé du filtre actif */}
+      {selectedLetter && (
+        <div className="flex items-center justify-between px-1 text-xs text-slate-500 dark:text-slate-400">
+          <span>Lettre sélectionnée : <b className="text-indigo-600 dark:text-indigo-400 text-sm">« {selectedLetter} »</b></span>
+          <span>{filteredWords.length} mot{filteredWords.length > 1 ? "s" : ""}</span>
+        </div>
+      )}
+
       {/* Liste des cartes de mots */}
       <div className="space-y-2">
         {filteredWords.length === 0 ? (
           <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800">
-            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">Aucun mot trouvé</p>
-            <p className="text-xs text-slate-400 mt-1">Essayez un autre mot ou ajoutez-en un nouveau.</p>
+            <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+              {selectedLetter ? `Aucun mot commençant par « ${selectedLetter} »` : "Aucun mot trouvé"}
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              {selectedLetter ? "Sélectionnez une autre lettre ou effacez le filtre." : "Essayez un autre mot ou ajoutez-en un nouveau."}
+            </p>
+            {selectedLetter && (
+              <button
+                onClick={() => setSelectedLetter(null)}
+                className="mt-3 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 text-xs font-bold rounded-xl"
+              >
+                Réinitialiser le filtre
+              </button>
+            )}
           </div>
         ) : (
           filteredWords.map((word) => {

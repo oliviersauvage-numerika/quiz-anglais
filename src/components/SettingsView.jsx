@@ -175,6 +175,10 @@ alter table public.words add column if not exists first_learned_at timestamptz;
 alter table public.words add column if not exists next_review_at timestamptz;
 alter table public.words add column if not exists last_reviewed_at timestamptz;
 alter table public.words add column if not exists is_mastered boolean default false;
+alter table public.words add column if not exists last_answered timestamptz;
+alter table public.words add column if not exists last_correct boolean;
+alter table public.words add column if not exists created_at timestamptz default now();
+alter table public.words add column if not exists updated_at timestamptz default now();
 
 -- Index pour recherche rapide et dédoublonnage
 create index if not exists idx_words_english on public.words (lower(english_word));

@@ -49,9 +49,23 @@ export default function App() {
     setWords(updatedWords);
   };
 
-  const handleWordAdded = () => {
+  const [notification, setNotification] = useState(null);
+
+  const showNotification = (text, type = "success") => {
+    setNotification({ text, type });
+    setTimeout(() => setNotification(null), 5000);
+  };
+
+  const handleWordAdded = (newWord, syncError) => {
     const loaded = storageService.getWords();
     setWords(loaded);
+    if (syncError) {
+      showNotification(`⚠️ Mot ajouté en local mais rejeté par Supabase : ${syncError}`, "error");
+    } else if (isSyncConfigured) {
+      showNotification(`✅ « ${newWord?.english_word || "Mot"} » enregistré et synchronisé dans Supabase !`);
+    } else {
+      showNotification(`« ${newWord?.english_word || "Mot"} » ajouté.`);
+    }
   };
 
   const unlearnedCount = words.filter((w) => !w.learned).length;
@@ -126,6 +140,18 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Bannière de notification Toast globale */}
+      {notification && (
+        <div className={`fixed top-14 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[92%] px-4 py-3 rounded-2xl shadow-xl backdrop-blur-md border animate-pop-in flex items-center gap-2.5 text-xs font-semibold ${
+          notification.type === 'error'
+            ? 'bg-rose-50/95 dark:bg-rose-950/95 text-rose-800 dark:text-rose-200 border-rose-200 dark:border-rose-800'
+            : 'bg-emerald-50/95 dark:bg-emerald-950/95 text-emerald-800 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800'
+        }`}>
+          <span className="flex-1">{notification.text}</span>
+          <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs">✕</button>
+        </div>
+      )}
 
       {/* Vue principale */}
       <main className="flex-1 flex flex-col pt-3">

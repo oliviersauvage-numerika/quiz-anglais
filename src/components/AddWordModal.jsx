@@ -189,7 +189,7 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
       }
 
       if (res.success) {
-        onWordAdded(res.word);
+        onWordAdded(res.word, res.syncError);
         onClose();
       }
     } catch (err) {

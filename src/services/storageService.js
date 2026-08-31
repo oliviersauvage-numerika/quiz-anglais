@@ -142,13 +142,19 @@ export const storageService = {
     storageService.saveWordsLocally(updated);
 
     // 2. Insertion en base de données Supabase
+    let syncError = null;
     try {
-      await syncService.insertWord(word);
+      const syncRes = await syncService.insertWord(word);
+      if (syncRes && !syncRes.success && syncRes.error) {
+        syncError = syncRes.error;
+        console.warn("Échec d'insertion Supabase :", syncRes.error);
+      }
     } catch (e) {
+      syncError = e.message;
       console.warn("Supabase insertion en arrière-plan :", e);
     }
 
-    return { success: true, word };
+    return { success: true, word, syncError };
   },
 
   // Mettre à jour un mot

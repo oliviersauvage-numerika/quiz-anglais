@@ -278,16 +278,43 @@ class SyncService {
       .subscribe();
   }
 
-  // Vérifier si la base de données est accessible
+  // Vérifier si la base de données est accessible en lecture ET en écriture
   async testConnection() {
-    if (!this.client) return { connected: false, error: "Supabase non configuré" };
+    if (!this.client) return { connected: false, error: "Supabase non configuré (URL ou clé manquante)" };
     try {
-      const { data, error } = await this.client.from("words").select("id").limit(1);
-      if (error) {
-        return { connected: false, error: error.message };
+      // 1. Tester la lecture
+      const { data, error: readError } = await this.client.from("words").select("id").limit(1);
+      if (readError) {
+        this.setStatus("error");
+        return { connected: false, error: `Erreur de lecture : ${readError.message}` };
       }
-      return { connected: true, data };
+
+      // 2. Tester l'écriture (pour vérifier que Row Level Security autorise bien l'INSERT)
+      const testId = "__test_sync_probe__";
+      const { error: insertError } = await this.client
+        .from("words")
+        .upsert({
+          id: testId,
+          english_word: "__test__",
+          french_translations: ["test"],
+          created_at: new Date().toISOString()
+        });
+
+      if (insertError) {
+        this.setStatus("error");
+        return { 
+          connected: false, 
+          error: `Erreur de droit d'écriture Supabase (RLS) : ${insertError.message}. Veuillez réexécuter le script SQL dans Supabase pour autoriser l'accès public (INSERT).` 
+        };
+      }
+
+      // 3. Nettoyer la ligne de test
+      await this.client.from("words").delete().eq("id", testId);
+
+      this.setStatus("synced");
+      return { connected: true };
     } catch (err) {
+      this.setStatus("error");
       return { connected: false, error: err.message };
     }
   }

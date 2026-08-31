@@ -124,6 +124,19 @@ export function SettingsView({ words, onWordsUpdate }) {
     }
   };
 
+  const handleTestConnection = async () => {
+    setIsSyncing(true);
+    showNotif("Test de lecture et d'écriture en cours...");
+    const test = await syncService.testConnection();
+    setIsSyncing(false);
+
+    if (test.connected) {
+      showNotif("✅ Connexion Supabase parfaite (Lecture & Écriture autorisées) !");
+    } else {
+      showNotif(`❌ Échec : ${test.error}`, "error");
+    }
+  };
+
   const handleRefreshFromCloud = async () => {
     setIsSyncing(true);
     const res = await storageService.refreshFromSupabase();
@@ -176,9 +189,20 @@ create table if not exists public.quiz_stats (
   updated_at timestamptz default now()
 );
 
--- 3. Activer le Temps Réel (Realtime)
-alter publication supabase_realtime add table public.words;
-alter publication supabase_realtime add table public.quiz_stats;
+-- 3. Activer le Temps Réel (Realtime) de façon sécurisée (sans erreur si déjà activé)
+do $$
+begin
+  alter publication supabase_realtime add table public.words;
+exception
+  when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.quiz_stats;
+exception
+  when duplicate_object then null;
+end $$;
 
 -- 4. Activer Row Level Security (RLS) et autoriser l'accès avec la clé publique (anon)
 alter table public.words enable row level security;
@@ -361,6 +385,15 @@ create policy "Allow public access on quiz_stats" on public.quiz_stats
             >
               <Download className="w-3.5 h-3.5 text-indigo-600" />
               <span>Recharger les données depuis Supabase</span>
+            </button>
+
+            <button
+              onClick={handleTestConnection}
+              disabled={isSyncing || !isSupabaseConfigured}
+              className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold shadow-xs flex items-center justify-center gap-1.5 transition"
+            >
+              <Database className="w-3.5 h-3.5 text-slate-500" />
+              <span>Tester la connexion & les droits (Lecture / Écriture)</span>
             </button>
           </div>
         </div>

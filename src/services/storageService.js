@@ -32,22 +32,39 @@ export const storageService = {
     }
   },
 
-  // Rafraîchir les mots depuis Supabase et mettre à jour le cache local
+  // Rafraîchir les mots depuis Supabase et mettre à jour le cache local (avec fusion intelligente anti-perte)
   refreshFromSupabase: async () => {
     try {
       const res = await syncService.fetchWords();
       if (res.success && Array.isArray(res.words)) {
-        // Si Supabase est vide mais que nous avons des mots locaux (ex: les 80 mots existants),
-        // on migre automatiquement les mots locaux vers Supabase !
         const localWords = storageService.getWords();
+
+        // 1. Si Supabase est totalement vide mais qu'on a des mots locaux : migration complète
         if (res.words.length === 0 && localWords.length > 0) {
           const stats = storageService.getGlobalStats();
           await syncService.migrateWords(localWords, stats);
           return { words: localWords, migrated: true, count: localWords.length };
         }
 
-        // Sinon, la base Supabase est la source de vérité
-        storageService.saveWordsLocally(res.words);
+        // 2. Détecter d'éventuels mots locaux ajoutés hors-ligne ou non encore dans Supabase
+        const remoteIds = new Set(res.words.map((w) => String(w.id)));
+        const unsyncedWords = localWords.filter((w) => !remoteIds.has(String(w.id)));
+
+        let finalWords = res.words;
+
+        if (unsyncedWords.length > 0) {
+          // Tenter d'envoyer les mots locaux orphelins vers Supabase pour ne jamais les perdre
+          try {
+            await syncService.migrateWords(unsyncedWords);
+          } catch (e) {
+            console.warn("Synchronisation des mots locaux en attente :", e);
+          }
+          // Conserver les mots locaux non encore synchronisés dans la liste active
+          finalWords = [...unsyncedWords, ...res.words];
+        }
+
+        // Sauvegarder dans le cache local la liste fusionnée
+        storageService.saveWordsLocally(finalWords);
 
         // Récupérer également les stats
         const statsRes = await syncService.fetchStats();
@@ -55,7 +72,7 @@ export const storageService = {
           localStorage.setItem(STATS_KEY, JSON.stringify(statsRes.stats));
         }
 
-        return { words: res.words, migrated: false };
+        return { words: finalWords, migrated: false };
       }
       return { words: storageService.getWords(), error: res.error };
     } catch (err) {

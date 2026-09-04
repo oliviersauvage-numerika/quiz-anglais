@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Spécification Technique - Algorithme SRS & Moteur de Quiz</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 18mm 18mm 18mm;
+    }
+    
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #1e293b;
+      background: #ffffff;
+      line-height: 1.5;
+      font-size: 13px;
+      margin: 0;
+      padding: 0;
+    }
+
+    .header {
+      border-bottom: 2px solid #4f46e5;
+      padding-bottom: 12px;
+      margin-bottom: 20px;
+    }
+
+    .header h1 {
+      font-size: 22px;
+      font-weight: 800;
+      color: #0f172a;
+      margin: 0 0 6px 0;
+      letter-spacing: -0.5px;
+    }
+
+    .header .subtitle {
+      font-size: 13px;
+      color: #64748b;
+      margin: 0;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: #e0e7ff;
+      color: #4338ca;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1e1b4b;
+      margin-top: 22px;
+      margin-bottom: 8px;
+      border-left: 4px solid #6366f1;
+      padding-left: 8px;
+      page-break-after: avoid;
+    }
+
+    h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #334155;
+      margin-top: 14px;
+      margin-bottom: 6px;
+      page-break-after: avoid;
+    }
+
+    p {
+      margin: 6px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 12px;
+      page-break-inside: avoid;
+    }
+
+    th {
+      background: #f8fafc;
+      color: #475569;
+      font-weight: 700;
+      text-align: left;
+      padding: 7px 10px;
+      border: 1px solid #e2e8f0;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td {
+      padding: 7px 10px;
+      border: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+
+    tr:nth-child(even) td {
+      background: #fbfcfe;
+    }
+
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      overflow-x: auto;
+      margin: 10px 0;
+      page-break-inside: avoid;
+      border: 1px solid #1e293b;
+    }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+      font-size: 11px;
+      background: #f1f5f9;
+      color: #0f172a;
+      padding: 2px 4px;
+      border-radius: 4px;
+      border: 1px solid #e2e8f0;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      border: none;
+      font-size: 11px;
+    }
+
+    .card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 10px 0;
+      page-break-inside: avoid;
+    }
+
+    .formula {
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      color: #3730a3;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11.5px;
+      margin: 8px 0;
+      page-break-inside: avoid;
+    }
+
+    .footer {
+      margin-top: 25px;
+      padding-top: 10px;
+      border-top: 1px solid #e2e8f0;
+      font-size: 10.5px;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .keyword { color: #f43f5e; font-weight: bold; }
+    .type { color: #38bdf8; }
+    .string { color: #34d399; }
+    .comment { color: #94a3b8; font-style: italic; }
+    .func { color: #818cf8; }
+    .number { color: #fbbf24; }
+
+    .page-break {
+      page-break-before: always;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="badge">Spécification Technique & Algorithmique</div>
+    <h1>Système de Répétition Espacée (SRS) & Moteur de Quiz</h1>
+    <p class="subtitle">Document de référence pour implémentation et réutilisation par un agent IA ou un développeur</p>
+  </div>
+
+  <h2>1. Modèle de Données (Schema d'un Mot)</h2>
+  <p>Chaque carte / mot dans le système d'apprentissage est modélisé selon l'interface TypeScript suivante :</p>
+
+  <pre><code><span class="keyword">interface</span> <span class="type">Word</span> {
+  <span class="comment">// Identification & Contenu linguistique</span>
+  id: <span class="type">string</span>;
+  english_word: <span class="type">string</span>;
+  part_of_speech: <span class="string">"noun"</span> | <span class="string">"verb"</span> | <span class="string">"adjective"</span> | <span class="string">"adverb"</span> | <span class="string">"other"</span>;
+  french_translations: <span class="type">string</span>[];  <span class="comment">// Liste ordonnée ou non de synonymes/traductions</span>
+
+  <span class="comment">// État d'apprentissage & SRS</span>
+  srsStage: <span class="type">number</span>;               <span class="comment">// Entier de 0 (apprentissage) à 10 (maîtrisé)</span>
+  successCount: <span class="type">number</span>;           <span class="comment">// Compteur de réussites (utilisé au palier 0 pour atteindre 3)</span>
+  learned: <span class="type">boolean</span>;               <span class="comment">// true si srsStage &gt;= 1</span>
+  isMastered: <span class="type">boolean</span>;            <span class="comment">// true si srsStage === 10 (validé sur 6 mois)</span>
+
+  <span class="comment">// Horodatages ISO 8601</span>
+  firstLearnedAt?: <span class="type">string</span> | <span class="type">null</span>; <span class="comment">// Date de passage du palier 0 au palier 1</span>
+  lastReviewedAt?: <span class="type">string</span> | <span class="type">null</span>; <span class="comment">// Date de la dernière évaluation</span>
+  nextReviewAt?: <span class="type">string</span> | <span class="type">null</span>;   <span class="comment">// Échéance de révision calculée (null si palier 0 ou 10)</span>
+  lastAnswered?: <span class="type">string</span> | <span class="type">null</span>;   <span class="comment">// Horodatage de la dernière réponse</span>
+  lastCorrect?: <span class="type">boolean</span>;          <span class="comment">// Résultat de la dernière réponse (true/false)</span>
+}</code></pre>
+
+  <h2>2. Échelle des Paliers de Répétition Espacée (10 Paliers)</h2>
+  <p>L'intervalle suit une progression exponentielle rapide, puis s'étale sur 5 consolidations mensuelles consécutives (durée totale : ~6 mois) :</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 14%;">Palier</th>
+        <th style="width: 26%;">Nom / Label</th>
+        <th style="width: 22%;">Intervalle ajouté</th>
+        <th style="width: 38%;">Condition de validation</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>0</b></td>
+        <td>Apprentissage initial</td>
+        <td><code>0 jour</code></td>
+        <td>3 validations réussies (<code>successCount &gt;= 3</code>)</td>
+      </tr>
+      <tr>
+        <td><b>1</b></td>
+        <td>Palier 1 (J+1)</td>
+        <td><code>+1 jour</code></td>
+        <td>1ère révision validée le lendemain</td>
+      </tr>
+      <tr>
+        <td><b>2</b></td>
+        <td>Palier 2 (J+2)</td>
+        <td><code>+2 jours</code></td>
+        <td>2ème révision validée 2 jours plus tard</td>
+      </tr>
+      <tr>
+        <td><b>3</b></td>
+        <td>Palier 3 (J+4)</td>
+        <td><code>+4 jours</code></td>
+        <td>3ème révision validée 4 jours plus tard</td>
+      </tr>
+      <tr>
+        <td><b>4</b></td>
+        <td>Palier 4 (1 semaine)</td>
+        <td><code>+7 jours</code></td>
+        <td>4ème révision validée 1 semaine plus tard</td>
+      </tr>
+      <tr>
+        <td><b>5</b></td>
+        <td>Palier 5 (1 mois)</td>
+        <td><code>+30 jours</code></td>
+        <td>5ème révision validée 1 mois plus tard</td>
+      </tr>
+      <tr>
+        <td><b>6</b></td>
+        <td>Consolidation M2</td>
+        <td><code>+30 jours</code></td>
+        <td>Maintien mensuel (Mois 2)</td>
+      </tr>
+      <tr>
+        <td><b>7</b></td>
+        <td>Consolidation M3</td>
+        <td><code>+30 jours</code></td>
+        <td>Maintien mensuel (Mois 3)</td>
+      </tr>
+      <tr>
+        <td><b>8</b></td>
+        <td>Consolidation M4</td>
+        <td><code>+30 jours</code></td>
+        <td>Maintien mensuel (Mois 4)</td>
+      </tr>
+      <tr>
+        <td><b>9</b></td>
+        <td>Consolidation M5</td>
+        <td><code>+30 jours</code></td>
+        <td>Dernière révision mensuelle avant maîtrise définitive</td>
+      </tr>
+      <tr>
+        <td><b>10</b></td>
+        <td><b>Définitivement Acquis 🏆</b></td>
+        <td><code>null</code> (Cycle clos)</td>
+        <td><b>6 mois consécutifs validés : ancré à vie</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="page-break"></div>
+
+  <h2>3. Machine à États et Règles de Transition (<code>calculateNextState</code>)</h2>
+  <p>L'algorithme implémente une <b>rétrogradation douce d'un seul palier ("Option B")</b> avec révision immédiate à <b>J+1</b> en cas d'erreur.</p>
+
+  <pre><code><span class="keyword">function</span> <span class="func">calculateNextState</span>(word: <span class="type">Word</span>, isCorrect: <span class="type">boolean</span>): <span class="type">Word</span> {
+  <span class="keyword">const</span> now = <span class="keyword">new</span> <span class="type">Date</span>().toISOString();
+  <span class="keyword">const</span> stage = word.srsStage || <span class="number">0</span>;
+  <span class="keyword">const</span> count = word.successCount || <span class="number">0</span>;
+
+  <span class="keyword">if</span> (isCorrect) {
+    <span class="keyword">if</span> (stage === <span class="number">0</span>) {
+      <span class="keyword">const</span> newCount = count + <span class="number">1</span>;
+      <span class="keyword">if</span> (newCount &gt;= <span class="number">3</span>) {
+        <span class="comment">// 1ère acquisition validée -&gt; Passage au Palier 1 (J+1)</span>
+        <span class="keyword">return</span> {
+          ...word,
+          srsStage: <span class="number">1</span>,
+          successCount: newCount,
+          learned: <span class="keyword">true</span>,
+          firstLearnedAt: word.firstLearnedAt || now,
+          nextReviewAt: addDays(now, <span class="number">1</span>),
+          lastReviewedAt: now,
+          lastAnswered: now,
+          lastCorrect: <span class="keyword">true</span>
+        };
+      }
+      <span class="keyword">return</span> { ...word, successCount: newCount, lastAnswered: now, lastCorrect: <span class="keyword">true</span> };
+    } <span class="keyword">else</span> {
+      <span class="comment">// Paliers 1 à 9 -&gt; Incrémentation d'un palier</span>
+      <span class="keyword">const</span> newStage = Math.min(<span class="number">10</span>, stage + <span class="number">1</span>);
+      <span class="keyword">const</span> isMastered = newStage &gt;= <span class="number">10</span>;
+      <span class="keyword">return</span> {
+        ...word,
+        srsStage: newStage,
+        successCount: count + <span class="number">1</span>,
+        learned: <span class="keyword">true</span>,
+        isMastered: isMastered,
+        nextReviewAt: isMastered ? <span class="keyword">null</span> : addDays(now, SRS_INTERVALS[newStage]),
+        lastReviewedAt: now,
+        lastAnswered: now,
+        lastCorrect: <span class="keyword">true</span>
+      };
+    }
+  } <span class="keyword">else</span> {
+    <span class="comment">// ERREUR : Rétrogradation douce d'un palier</span>
+    <span class="keyword">if</span> (stage &gt;= <span class="number">2</span>) {
+      <span class="comment">// Rétrograde de stage N vers N-1 avec révision d'urgence à J+1</span>
+      <span class="keyword">return</span> {
+        ...word,
+        srsStage: stage - <span class="number">1</span>,
+        learned: <span class="keyword">true</span>,
+        isMastered: <span class="keyword">false</span>,
+        nextReviewAt: addDays(now, <span class="number">1</span>), <span class="comment">// Consolidation dès demain</span>
+        lastReviewedAt: now,
+        lastAnswered: now,
+        lastCorrect: <span class="keyword">false</span>
+      };
+    } <span class="keyword">else</span> <span class="keyword">if</span> (stage === <span class="number">1</span>) {
+      <span class="comment">// Rétrograde en apprentissage initial (2 étoiles sur 3 pré-validées)</span>
+      <span class="keyword">return</span> {
+        ...word,
+        srsStage: <span class="number">0</span>,
+        successCount: <span class="number">2</span>,
+        learned: <span class="keyword">false</span>,
+        isMastered: <span class="keyword">false</span>,
+        nextReviewAt: <span class="keyword">null</span>,
+        lastReviewedAt: now,
+        lastAnswered: now,
+        lastCorrect: <span class="keyword">false</span>
+      };
+    } <span class="keyword">else</span> {
+      <span class="comment">// Était déjà au palier 0</span>
+      <span class="keyword">return</span> {
+        ...word,
+        srsStage: <span class="number">0</span>,
+        learned: <span class="keyword">false</span>,
+        isMastered: <span class="keyword">false</span>,
+        nextReviewAt: <span class="keyword">null</span>,
+        lastReviewedAt: now,
+        lastAnswered: now,
+        lastCorrect: <span class="keyword">false</span>
+      };
+    }
+  }
+}</code></pre>
+
+  <h2>4. Ordonnancement & Sélection des Questions (Scheduling)</h2>
+  
+  <div class="card">
+    <h3 style="margin-top: 0;">A. Condition d'échéance d'une révision (<code>isReviewDue</code>)</h3>
+    <div class="formula">
+      isReviewDue(word) = (¬word.isMastered) ∧ (word.srsStage ≥ 1) ∧ (word.nextReviewAt == null ∨ Date(word.nextReviewAt) ≤ Date.now())
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top: 0;">B. Hiérarchie de sélection des candidats (<code>candidateWords</code>)</h3>
+    <ol style="margin: 4px 0; padding-left: 18px;">
+      <li><b>Priorité 1 (Active Pool) :</b> <code>[...dueReviews, ...learningWords]</code> — Mots échus du jour + Mots en apprentissage initial (Palier 0).</li>
+      <li><b>Priorité 2 (Fallback) :</b> <code>words.filter(w =&gt; !w.isMastered &amp;&amp; w.srsStage &lt; 10)</code> — Mots en cours de consolidation si aucune révision n'est échue.</li>
+      <li><b>Priorité 3 (Mode libre) :</b> Ensemble de la base si l'utilisateur coche "S'entraîner sur tous les mots".</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top: 0;">C. File d'attente & Protection anti-répétition consécutive</h3>
+    <ul style="margin: 4px 0; padding-left: 18px;">
+      <li><b>Génération de la file :</b> Mélange aléatoire (Fisher-Yates) avec révisions dues placées en début de file : <code>[...shuffle(due), ...shuffle(others)]</code>.</li>
+      <li><b>Anti-répétition :</b> Si le premier élément de la file a le même <code>id</code> que la question venant d'être répondue, il est immédiatement interchangé avec le second élément.</li>
+      <li><b>Choix de la traduction française :</b> Tirage aléatoire uniforme parmi le tableau <code>french_translations</code> pour stimuler la compréhension de tous les synonymes.</li>
+    </ul>
+  </div>
+
+  <h2>5. Moteur d'Évaluation & Tolérance Linguistique (<code>normalize</code>)</h2>
+  <pre><code><span class="keyword">function</span> <span class="func">normalize</span>(text: <span class="type">string</span>, partOfSpeech: <span class="type">string</span> = <span class="string">""</span>): <span class="type">string</span> {
+  <span class="keyword">let</span> clean = (text || <span class="string">""</span>)
+    .trim()
+    .toLowerCase()
+    .replace(/[’']/g, <span class="string">"'"</span>)      <span class="comment">// Normalisation des apostrophes typographiques</span>
+    .replace(/\s+/g, <span class="string">" "</span>);      <span class="comment">// Nettoyage des espaces multiples</span>
+
+  <span class="keyword">const</span> pos = (partOfSpeech || <span class="string">""</span>).toLowerCase();
+
+  <span class="comment">// Verbes : tolérance sur le préfixe "to " ("to run" -&gt; "run")</span>
+  <span class="keyword">if</span> (pos === <span class="string">"verb"</span> || clean.startsWith(<span class="string">"to "</span>)) {
+    clean = clean.replace(/^to\s+/i, <span class="string">""</span>).trim();
+  }
+
+  <span class="comment">// Noms : tolérance sur les articles "a", "an", "the" ("the house" -&gt; "house")</span>
+  <span class="keyword">if</span> (pos === <span class="string">"noun"</span> || /^(a|an|the)\s+/i.test(clean)) {
+    clean = clean.replace(/^(a|an|the)\s+/i, <span class="string">""</span>).trim();
+  }
+
+  <span class="keyword">return</span> clean;
+}
+
+<span class="comment">// Test d'égalité de réponse :</span>
+<span class="keyword">const</span> isCorrect = normalize(userAnswer, word.part_of_speech) === normalize(word.english_word, word.part_of_speech);</code></pre>
+
+  <h2>6. Métriques & Statistiques Globales</h2>
+  <p>À chaque tentative enregistrée :</p>
+  <ul>
+    <li><code>totalAnswered += 1</code></li>
+    <li>Si <code>isCorrect === true</code> : <code>correctAnswers += 1</code>, <code>streak += 1</code>, <code>maxStreak = max(maxStreak, streak)</code></li>
+    <li>Si <code>isCorrect === false</code> : <code>streak = 0</code></li>
+  </ul>
+
+  <div class="footer">
+    <span>Spécification Système SRS — Application Quiz Anglais</span>
+    <span>Export PDF Haute Définition</span>
+  </div>
+
+</body>
+</html>

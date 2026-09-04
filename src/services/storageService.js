@@ -6,33 +6,35 @@ const STORAGE_KEY = "quiz_anglais_vocab_v2";
 const STATS_KEY = "quiz_anglais_stats_v2";
 
 export const storageService = {
-  // Lecture synchrone immédiate depuis le cache local
+  // Lecture synchrone immédiate depuis le cache local avec nettoyage/assainissement
   getWords: () => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (!stored) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(initialWords));
-        return initialWords;
+        const sanitizedInitials = initialWords.map(srsService.sanitizeWord);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizedInitials));
+        return sanitizedInitials;
       }
       const parsed = JSON.parse(stored);
-      // Nettoyer d'éventuels anciens formats
-      return parsed.map(({ example_english, example_french, ...rest }) => rest);
+      if (!Array.isArray(parsed)) return initialWords.map(srsService.sanitizeWord);
+      return parsed.map(srsService.sanitizeWord);
     } catch (e) {
       console.error("Erreur lors de la lecture du LocalStorage", e);
-      return initialWords;
+      return initialWords.map(srsService.sanitizeWord);
     }
   },
 
   // Sauvegarde dans le cache local
   saveWordsLocally: (words) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(words));
+      const sanitized = words.map(srsService.sanitizeWord);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
     } catch (e) {
       console.error("Erreur lors de la sauvegarde locale", e);
     }
   },
 
-  // Rafraîchir les mots depuis Supabase et mettre à jour le cache local (avec fusion intelligente anti-perte)
+  // Rafraîchir les mots depuis Supabase et mettre à jour le cache local
   refreshFromSupabase: async () => {
     try {
       const res = await syncService.fetchWords();
@@ -50,20 +52,17 @@ export const storageService = {
         const remoteIds = new Set(res.words.map((w) => String(w.id)));
         const unsyncedWords = localWords.filter((w) => !remoteIds.has(String(w.id)));
 
-        let finalWords = res.words;
+        let finalWords = res.words.map(srsService.sanitizeWord);
 
         if (unsyncedWords.length > 0) {
-          // Tenter d'envoyer les mots locaux orphelins vers Supabase pour ne jamais les perdre
           try {
             await syncService.migrateWords(unsyncedWords);
           } catch (e) {
             console.warn("Synchronisation des mots locaux en attente :", e);
           }
-          // Conserver les mots locaux non encore synchronisés dans la liste active
-          finalWords = [...unsyncedWords, ...res.words];
+          finalWords = [...unsyncedWords.map(srsService.sanitizeWord), ...finalWords];
         }
 
-        // Sauvegarder dans le cache local la liste fusionnée
         storageService.saveWordsLocally(finalWords);
 
         // Récupérer également les stats
@@ -91,15 +90,15 @@ export const storageService = {
         let words = storageService.getWords();
 
         if (eventType === "INSERT" && newRow) {
-          const exists = words.some(w => w.id === String(newRow.id));
+          const exists = words.some((w) => w.id === String(newRow.id));
           if (!exists) {
-            words = [fromDBWord(newRow), ...words];
+            words = [srsService.sanitizeWord(fromDBWord(newRow)), ...words];
           }
         } else if (eventType === "UPDATE" && newRow) {
-          const updatedWord = fromDBWord(newRow);
-          words = words.map(w => w.id === String(newRow.id) ? { ...w, ...updatedWord } : w);
+          const updatedWord = srsService.sanitizeWord(fromDBWord(newRow));
+          words = words.map((w) => (w.id === String(newRow.id) ? { ...w, ...updatedWord } : w));
         } else if (eventType === "DELETE" && oldRow) {
-          words = words.filter(w => w.id !== String(oldRow.id));
+          words = words.filter((w) => w.id !== String(oldRow.id));
         }
 
         storageService.saveWordsLocally(words);
@@ -142,17 +141,26 @@ export const storageService = {
       return { success: false, reason: "duplicate", existing: duplicate };
     }
 
-    const word = {
+    const word = srsService.sanitizeWord({
       id: "word-" + Date.now() + "-" + Math.random().toString(36).substr(2, 5),
       english_word: (newWordData.english_word || "").trim(),
       part_of_speech: (newWordData.part_of_speech || "noun").trim().toLowerCase(),
       french_translations: Array.isArray(newWordData.french_translations) 
         ? newWordData.french_translations.filter(Boolean)
         : [newWordData.french_translation_1].filter(Boolean),
-      successCount: 0,
+      accepted_answers: Array.isArray(newWordData.accepted_answers)
+        ? newWordData.accepted_answers.filter(Boolean)
+        : [],
+      frenchPrompt: newWordData.frenchPrompt || undefined,
+      exampleSentence: newWordData.exampleSentence || undefined,
+      senseId: newWordData.senseId || undefined,
+      srsStage: 0,
+      learningSuccessCount: 0,
+      totalCorrectAnswers: 0,
       learned: false,
+      isMastered: false,
       createdAt: new Date().toISOString()
-    };
+    });
 
     // 1. Sauvegarde locale immédiate (optimiste)
     const updated = [word, ...words];
@@ -177,7 +185,7 @@ export const storageService = {
   // Mettre à jour un mot
   updateWord: (id, updates) => {
     const words = storageService.getWords();
-    const updated = words.map((w) => (w.id === id ? { ...w, ...updates } : w));
+    const updated = words.map((w) => (w.id === id ? srsService.sanitizeWord({ ...w, ...updates }) : w));
     storageService.saveWordsLocally(updated);
 
     // Synchronisation en base de données Supabase
@@ -198,32 +206,38 @@ export const storageService = {
     return updated;
   },
 
-  // Enregistrer le résultat du quiz
-  recordQuizResult: (id, isCorrect) => {
+  // Enregistrer le résultat du quiz avec prise en compte du mode ("initial-learning" | "srs-review" | "free-practice")
+  recordQuizResult: (id, isCorrect, mode = "srs-review") => {
     const words = storageService.getWords();
     let updatedWord = null;
 
     const updated = words.map((w) => {
       if (w.id !== id) return w;
-      updatedWord = srsService.calculateNextState(w, isCorrect);
+      updatedWord = srsService.calculateNextState(w, isCorrect, mode);
       return updatedWord;
     });
 
     storageService.saveWordsLocally(updated);
+
     if (updatedWord) {
       syncService.updateWord(id, {
-        successCount: updatedWord.successCount,
+        successCount: updatedWord.learningSuccessCount,
+        learningSuccessCount: updatedWord.learningSuccessCount,
+        totalCorrectAnswers: updatedWord.totalCorrectAnswers,
         learned: updatedWord.learned,
         srsStage: updatedWord.srsStage,
         firstLearnedAt: updatedWord.firstLearnedAt,
         nextReviewAt: updatedWord.nextReviewAt,
-        lastReviewedAt: updatedWord.lastReviewedAt,
+        lastSrsReviewAt: updatedWord.lastSrsReviewAt,
+        lastReviewedAt: updatedWord.lastSrsReviewAt,
         isMastered: updatedWord.isMastered,
-        lastAnswered: updatedWord.lastAnswered,
+        lastAnsweredAt: updatedWord.lastAnsweredAt,
+        lastAnswered: updatedWord.lastAnsweredAt,
         lastCorrect: updatedWord.lastCorrect
       });
     }
 
+    // Les statistiques globales sont incrémentées pour tous les modes
     storageService.recordGlobalStats(isCorrect);
     return { words: updated, updatedWord };
   },
@@ -232,24 +246,30 @@ export const storageService = {
   resetWordProgress: (id) => {
     const words = storageService.getWords();
     const updated = words.map((w) => 
-      w.id === id ? { 
+      w.id === id ? srsService.sanitizeWord({ 
         ...w, 
-        successCount: 0, 
+        learningSuccessCount: 0, 
+        successCount: 0,
+        totalCorrectAnswers: 0,
         learned: false, 
         srsStage: 0, 
         firstLearnedAt: undefined, 
-        nextReviewAt: undefined, 
+        nextReviewAt: null, 
+        lastSrsReviewAt: undefined, 
         lastReviewedAt: undefined, 
         isMastered: false 
-      } : w
+      }) : w
     );
     storageService.saveWordsLocally(updated);
     syncService.updateWord(id, { 
       successCount: 0, 
+      learningSuccessCount: 0,
+      totalCorrectAnswers: 0,
       learned: false, 
       srsStage: 0, 
       firstLearnedAt: null, 
       nextReviewAt: null, 
+      lastSrsReviewAt: null,
       lastReviewedAt: null, 
       isMastered: false 
     });
@@ -258,15 +278,19 @@ export const storageService = {
 
   resetAllProgress: () => {
     const words = storageService.getWords();
-    const updated = words.map((w) => ({
+    const updated = words.map((w) => srsService.sanitizeWord({
       ...w,
+      learningSuccessCount: 0,
       successCount: 0,
+      totalCorrectAnswers: 0,
       learned: false,
       srsStage: 0,
       firstLearnedAt: undefined,
-      nextReviewAt: undefined,
+      nextReviewAt: null,
+      lastSrsReviewAt: undefined,
       lastReviewedAt: undefined,
       isMastered: false,
+      lastAnsweredAt: undefined,
       lastAnswered: undefined,
       lastCorrect: undefined
     }));
@@ -276,9 +300,10 @@ export const storageService = {
   },
 
   restoreInitialWords: async () => {
-    storageService.saveWordsLocally(initialWords);
-    await syncService.migrateWords(initialWords);
-    return initialWords;
+    const sanitized = initialWords.map(srsService.sanitizeWord);
+    storageService.saveWordsLocally(sanitized);
+    await syncService.migrateWords(sanitized);
+    return sanitized;
   },
 
   getGlobalStats: () => {
@@ -314,12 +339,11 @@ export const storageService = {
     try {
       const data = JSON.parse(jsonString);
       if (Array.isArray(data.words)) {
-        const cleaned = data.words.map(({ example_english, example_french, ...rest }) => rest);
+        const cleaned = data.words.map(srsService.sanitizeWord);
         storageService.saveWordsLocally(cleaned);
         if (data.stats) {
           localStorage.setItem(STATS_KEY, JSON.stringify(data.stats));
         }
-        // Migrer les mots importés vers Supabase
         await syncService.migrateWords(cleaned, data.stats || null);
         return { success: true, count: cleaned.length };
       }

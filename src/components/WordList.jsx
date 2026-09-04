@@ -366,7 +366,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                     <div className="flex items-center gap-2 mt-2 text-[11px]">
                       {word.isMastered || stage >= 10 ? (
                         <span className="text-amber-800 dark:text-amber-300 font-bold flex items-center gap-1">
-                          🏆 Maîtrisé (6 mois validés)
+                          🏆 Maîtrisé (~5 mois et demi validés)
                         </span>
                       ) : isDue ? (
                         <span className="text-amber-700 dark:text-amber-400 font-bold flex items-center gap-1 animate-pulse">
@@ -380,7 +380,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                         </span>
                       ) : (
                         <span className="text-slate-400">
-                          Apprentissage en cours (3★ requis)
+                          Apprentissage initial ({word.learningSuccessCount || 0}/3 ★)
                         </span>
                       )}
                     </div>
@@ -390,7 +390,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                   <div className="flex flex-col items-end gap-1.5">
                     {word.isMastered || stage >= 10 ? (
                       <span className="flex items-center gap-1 text-[11px] font-bold text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-700">
-                        🏆 Acquis
+                        🏆 Maîtrisé
                       </span>
                     ) : stage > 0 ? (
                       <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${stageInfo.badgeColor}`}>
@@ -402,8 +402,8 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                           <span
                             key={idx}
                             className={
-                              idx < (word.successCount || 0)
-                                ? "text-amber-400"
+                              idx < (word.learningSuccessCount ?? word.successCount ?? 0)
+                                ? "text-amber-400 font-bold"
                                 : "text-slate-200 dark:text-slate-700"
                             }
                           >
@@ -414,7 +414,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                     )}
 
                     <div className="flex items-center gap-1">
-                      {(word.successCount > 0 || stage > 0) && (
+                      {((word.learningSuccessCount || 0) > 0 || stage > 0) && (
                         <button
                           onClick={(e) => handleResetProgress(word.id, e)}
                           className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition rounded"

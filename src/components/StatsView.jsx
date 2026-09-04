@@ -88,7 +88,7 @@ export function StatsView({ words }) {
 
           <div className="p-3 bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded-2xl col-span-2 flex items-center justify-between">
             <div>
-              <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-medium">Définitivement Acquis (6 mois)</span>
+              <span className="text-slate-500 dark:text-slate-400 block text-[11px] font-medium">Consolidé et Maîtrisé (~5 mois et demi)</span>
               <span className="text-xl font-black text-emerald-700 dark:text-emerald-300">🏆 {masteredCount} mots</span>
             </div>
             <Sparkles className="w-6 h-6 text-amber-500" />

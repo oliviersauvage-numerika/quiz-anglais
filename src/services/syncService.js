@@ -13,6 +13,11 @@ const DEFAULT_CONFIG = {
 
 // Fonctions de transformation Objet JS <-> Ligne Base de Données
 export function toDBWord(w) {
+  const stage = typeof w.srsStage === "number" ? w.srsStage : (typeof w.srs_stage === "number" ? w.srs_stage : (w.learned ? 1 : 0));
+  const learningSuccess = typeof w.learningSuccessCount === "number" 
+    ? w.learningSuccessCount 
+    : (typeof w.successCount === "number" ? w.successCount : (w.success_count || 0));
+
   return {
     id: String(w.id || ("word-" + Date.now() + "-" + Math.random().toString(36).substr(2, 5))),
     english_word: (w.english_word || "").trim(),
@@ -20,14 +25,14 @@ export function toDBWord(w) {
     french_translations: Array.isArray(w.french_translations) 
       ? w.french_translations.filter(Boolean)
       : [w.french_translation_1].filter(Boolean),
-    success_count: typeof w.successCount === "number" ? w.successCount : (w.success_count || 0),
-    learned: Boolean(w.learned),
-    srs_stage: typeof w.srsStage === "number" ? w.srsStage : (typeof w.srs_stage === "number" ? w.srs_stage : (w.learned ? 1 : 0)),
-    first_learned_at: w.firstLearnedAt || w.first_learned_at || (w.learned ? w.createdAt || new Date().toISOString() : null),
-    next_review_at: w.nextReviewAt || w.next_review_at || null,
-    last_reviewed_at: w.lastReviewedAt || w.last_reviewed_at || null,
-    is_mastered: Boolean(w.isMastered || w.is_mastered || (w.srsStage >= 10)),
-    last_answered: w.lastAnswered || w.last_answered || null,
+    success_count: learningSuccess,
+    learned: Boolean(stage >= 1),
+    srs_stage: stage,
+    first_learned_at: w.firstLearnedAt || w.first_learned_at || (stage >= 1 ? w.createdAt || new Date().toISOString() : null),
+    next_review_at: stage >= 10 || stage === 0 ? null : (w.nextReviewAt || w.next_review_at || null),
+    last_reviewed_at: w.lastSrsReviewAt || w.lastReviewedAt || w.last_reviewed_at || null,
+    is_mastered: Boolean(stage >= 10),
+    last_answered: w.lastAnsweredAt || w.lastAnswered || w.last_answered || null,
     last_correct: typeof w.lastCorrect === "boolean" ? w.lastCorrect : (typeof w.last_correct === "boolean" ? w.last_correct : null),
     created_at: w.createdAt || w.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString()
@@ -35,18 +40,25 @@ export function toDBWord(w) {
 }
 
 export function fromDBWord(row) {
+  const stage = typeof row.srs_stage === "number" ? row.srs_stage : (row.learned ? 1 : 0);
+  const rawCount = row.success_count ?? 0;
+
   return {
     id: String(row.id),
     english_word: row.english_word,
     part_of_speech: row.part_of_speech,
     french_translations: Array.isArray(row.french_translations) ? row.french_translations : [],
-    successCount: row.success_count ?? 0,
-    learned: Boolean(row.learned),
-    srsStage: typeof row.srs_stage === "number" ? row.srs_stage : (row.learned ? 1 : 0),
+    learningSuccessCount: stage === 0 ? rawCount : 0,
+    totalCorrectAnswers: rawCount,
+    successCount: stage === 0 ? rawCount : 0,
+    learned: Boolean(stage >= 1),
+    srsStage: stage,
     firstLearnedAt: row.first_learned_at || undefined,
-    nextReviewAt: row.next_review_at || undefined,
+    nextReviewAt: stage >= 10 || stage === 0 ? null : (row.next_review_at || undefined),
+    lastSrsReviewAt: row.last_reviewed_at || undefined,
     lastReviewedAt: row.last_reviewed_at || undefined,
-    isMastered: Boolean(row.is_mastered || (row.srs_stage >= 10)),
+    isMastered: Boolean(stage >= 10),
+    lastAnsweredAt: row.last_answered || undefined,
     lastAnswered: row.last_answered || undefined,
     lastCorrect: row.last_correct !== null ? row.last_correct : undefined,
     createdAt: row.created_at || new Date().toISOString()

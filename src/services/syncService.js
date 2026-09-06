@@ -25,6 +25,7 @@ export function toDBWord(w) {
     french_translations: Array.isArray(w.french_translations) 
       ? w.french_translations.filter(Boolean)
       : [w.french_translation_1].filter(Boolean),
+    example_sentence: w.exampleSentence || w.example_sentence || w.notes || null,
     success_count: learningSuccess,
     learned: Boolean(stage >= 1),
     srs_stage: stage,
@@ -42,12 +43,15 @@ export function toDBWord(w) {
 export function fromDBWord(row) {
   const stage = typeof row.srs_stage === "number" ? row.srs_stage : (row.learned ? 1 : 0);
   const rawCount = row.success_count ?? 0;
+  const contextNote = row.example_sentence || row.exampleSentence || row.notes || undefined;
 
   return {
     id: String(row.id),
     english_word: row.english_word,
     part_of_speech: row.part_of_speech,
     french_translations: Array.isArray(row.french_translations) ? row.french_translations : [],
+    exampleSentence: contextNote,
+    notes: contextNote,
     learningSuccessCount: stage === 0 ? rawCount : 0,
     totalCorrectAnswers: rawCount,
     successCount: stage === 0 ? rawCount : 0,

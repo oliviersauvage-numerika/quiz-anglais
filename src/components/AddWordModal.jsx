@@ -37,6 +37,7 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
   const [englishWord, setEnglishWord] = useState("");
   const [partOfSpeech, setPartOfSpeech] = useState("noun");
   const [translations, setTranslations] = useState([""]);
+  const [contextNotes, setContextNotes] = useState("");
 
   // Alerte doublon & statut
   const [duplicateFound, setDuplicateFound] = useState(null);
@@ -54,6 +55,7 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
       setEnglishWord("");
       setPartOfSpeech("noun");
       setTranslations([""]);
+      setContextNotes("");
       setDuplicateFound(null);
       setStatusMessage(null);
       setShowKeyInput(false);
@@ -117,6 +119,7 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
       setEnglishWord(result.english_word);
       setPartOfSpeech(result.part_of_speech);
       setTranslations(result.french_translations.length > 0 ? result.french_translations : [""]);
+      setContextNotes(result.notes || result.exampleSentence || result.rawResponse?.notes || "");
       setTranslationSource(result.source || "");
       setRawResponseData(result.rawResponse || result);
       setHasSearched(true);
@@ -179,7 +182,9 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
       const res = await storageService.addWord({
         english_word: englishWord.trim(),
         part_of_speech: partOfSpeech,
-        french_translations: cleanTranslations
+        french_translations: cleanTranslations,
+        exampleSentence: contextNotes.trim() || undefined,
+        notes: contextNotes.trim() || undefined
       });
 
       if (!res.success && res.reason === "duplicate") {
@@ -500,6 +505,23 @@ export function AddWordModal({ isOpen, onClose, onWordAdded }) {
                       )}
                     </div>
                   ))}
+                </div>
+              </div>
+
+              {/* Note de contexte / précision de sens (jaune italique) */}
+              <div>
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1.5 mb-1">
+                  <Info className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Contexte & Précision de sens (affiché en indice dans le quiz)</span>
+                </label>
+                <div className="relative">
+                  <textarea
+                    rows={2}
+                    value={contextNotes}
+                    onChange={(e) => setContextNotes(e.target.value)}
+                    placeholder="Ex: S'emploie au sens propre (un lieu, une invention) comme au sens figuré..."
+                    className="w-full px-3 py-2 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/60 rounded-xl text-xs italic text-amber-900 dark:text-amber-200 focus:ring-2 focus:ring-amber-500 transition resize-none"
+                  />
                 </div>
               </div>
             </div>

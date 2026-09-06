@@ -248,3 +248,109 @@ test("14. learned et isMastered restent strictement cohérents avec srsStage", (
   assert.equal(word10.isMastered, true);
   assert.equal(word10.nextReviewAt, null);
 });
+
+test("15. Tolérance sur l'infinitif 'to' pour les verbes (omission et ajout)", () => {
+  const verbWithTo = {
+    english_word: "To boast",
+    part_of_speech: "verb"
+  };
+  const verbWithoutTo = {
+    english_word: "boast",
+    part_of_speech: "verb"
+  };
+
+  assert.equal(srsService.checkAnswer("boast", verbWithTo), true);
+  assert.equal(srsService.checkAnswer("to boast", verbWithTo), true);
+  assert.equal(srsService.checkAnswer("To Boast", verbWithTo), true);
+
+  assert.equal(srsService.checkAnswer("boast", verbWithoutTo), true);
+  assert.equal(srsService.checkAnswer("to boast", verbWithoutTo), true);
+
+  const verbExpression = {
+    english_word: "To keep fit",
+    part_of_speech: "verb"
+  };
+  assert.equal(srsService.checkAnswer("keep fit", verbExpression), true);
+  assert.equal(srsService.checkAnswer("to keep fit", verbExpression), true);
+});
+
+test("16. Tolérance sur les articles 'a', 'an', 'the' pour les noms et expressions", () => {
+  const nounWord = {
+    english_word: "Cradle",
+    part_of_speech: "noun"
+  };
+  assert.equal(srsService.checkAnswer("cradle", nounWord), true);
+  assert.equal(srsService.checkAnswer("a cradle", nounWord), true);
+  assert.equal(srsService.checkAnswer("the cradle", nounWord), true);
+
+  const idiomWithArticle = {
+    english_word: "A piece of cake",
+    part_of_speech: "expression"
+  };
+  assert.equal(srsService.checkAnswer("a piece of cake", idiomWithArticle), true);
+  assert.equal(srsService.checkAnswer("piece of cake", idiomWithArticle), true);
+  assert.equal(srsService.checkAnswer("the piece of cake", idiomWithArticle), true);
+});
+
+test("17. Tolérance sur les pronoms impersonnels (one, one's, oneself, someone, somebody)", () => {
+  const idiomWithOnes = {
+    english_word: "To make up one's mind",
+    part_of_speech: "expression"
+  };
+  assert.equal(srsService.checkAnswer("make up one's mind", idiomWithOnes), true);
+  assert.equal(srsService.checkAnswer("to make up one's mind", idiomWithOnes), true);
+  assert.equal(srsService.checkAnswer("make up your mind", idiomWithOnes), true);
+  assert.equal(srsService.checkAnswer("make up mind", idiomWithOnes), true);
+
+  const verbWithOneself = {
+    english_word: "To hurt oneself",
+    part_of_speech: "verb"
+  };
+  assert.equal(srsService.checkAnswer("hurt oneself", verbWithOneself), true);
+  assert.equal(srsService.checkAnswer("hurt yourself", verbWithOneself), true);
+  assert.equal(srsService.checkAnswer("hurt one", verbWithOneself), true);
+  assert.equal(srsService.checkAnswer("to hurt oneself", verbWithOneself), true);
+  assert.equal(srsService.checkAnswer("hurt", verbWithOneself), true);
+
+  const expressionWithSomeone = {
+    english_word: "To look after someone",
+    part_of_speech: "verb"
+  };
+  assert.equal(srsService.checkAnswer("look after someone", expressionWithSomeone), true);
+  assert.equal(srsService.checkAnswer("look after one", expressionWithSomeone), true);
+  assert.equal(srsService.checkAnswer("look after", expressionWithSomeone), true);
+  assert.equal(srsService.checkAnswer("to look after", expressionWithSomeone), true);
+});
+
+test("18. Gestion des parenthèses optionnelles dans les entrées du dictionnaire", () => {
+  const wordWithParens = {
+    english_word: "give (someone) a hand",
+    part_of_speech: "expression"
+  };
+  assert.equal(srsService.checkAnswer("give someone a hand", wordWithParens), true);
+  assert.equal(srsService.checkAnswer("give a hand", wordWithParens), true);
+  assert.equal(srsService.checkAnswer("give hand", wordWithParens), true);
+  assert.equal(srsService.checkAnswer("to give a hand", wordWithParens), true);
+});
+
+test("19. Préservation de la note de contexte (exampleSentence / notes) lors des transitions SRS", () => {
+  let word = {
+    id: "w-context",
+    english_word: "To discover",
+    part_of_speech: "verb",
+    french_translations: ["Découvrir", "Trouver"],
+    exampleSentence: "S'emploie au sens propre comme au sens figuré.",
+    notes: "S'emploie au sens propre comme au sens figuré.",
+    srsStage: 0,
+    learningSuccessCount: 0,
+    learned: false
+  };
+
+  const sanitized = srsService.sanitizeWord(word);
+  assert.equal(sanitized.exampleSentence, "S'emploie au sens propre comme au sens figuré.");
+
+  // Succès
+  const next = srsService.calculateNextState(sanitized, true, "initial-learning");
+  assert.equal(next.exampleSentence, "S'emploie au sens propre comme au sens figuré.");
+});
+

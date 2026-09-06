@@ -1,12 +1,48 @@
 // Service de recherche & traduction (Anglais -> Français) avec support Gemini et Moteur Intégré
 
 export const PART_OF_SPEECH_LABELS = {
-  noun: { fr: "Nom", en: "Noun", color: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300" },
-  verb: { fr: "Verbe", en: "Verb", color: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300" },
-  adjective: { fr: "Adjectif", en: "Adjective", color: "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/40 dark:text-purple-300" },
-  adverb: { fr: "Adverbe", en: "Adverb", color: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300" },
-  preposition: { fr: "Préposition", en: "Preposition", color: "bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-900/40 dark:text-rose-300" },
-  expression: { fr: "Expression", en: "Idiom", color: "bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-900/40 dark:text-teal-300" }
+  noun: { 
+    fr: "Nom", 
+    en: "Noun", 
+    promptFr: "ce nom",
+    placeholder: "ex: book ou a book...",
+    color: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300" 
+  },
+  verb: { 
+    fr: "Verbe", 
+    en: "Verb", 
+    promptFr: "ce verbe",
+    placeholder: "ex: do ou to do...",
+    color: "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300" 
+  },
+  adjective: { 
+    fr: "Adjectif", 
+    en: "Adjective", 
+    promptFr: "cet adjectif",
+    placeholder: "Tapez l'adjectif en anglais...",
+    color: "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/40 dark:text-purple-300" 
+  },
+  adverb: { 
+    fr: "Adverbe", 
+    en: "Adverb", 
+    promptFr: "cet adverbe",
+    placeholder: "Tapez l'adverbe en anglais...",
+    color: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300" 
+  },
+  preposition: { 
+    fr: "Préposition", 
+    en: "Preposition", 
+    promptFr: "cette préposition",
+    placeholder: "Tapez la préposition en anglais...",
+    color: "bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-900/40 dark:text-rose-300" 
+  },
+  expression: { 
+    fr: "Expression", 
+    en: "Idiom", 
+    promptFr: "cette expression",
+    placeholder: "Tapez l'expression en anglais...",
+    color: "bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-900/40 dark:text-teal-300" 
+  }
 };
 
 const GEMINI_STORAGE_KEY = "quiz_anglais_gemini_api_key";
@@ -219,15 +255,92 @@ Réponds UNIQUEMENT sous forme d'un objet JSON strict :
       enWord = "To " + enWord;
     }
 
+    const notes = (parsed.notes || "").trim();
+
     return {
       english_word: enWord,
       part_of_speech: pos,
       french_translations: Array.isArray(parsed.french_translations)
         ? parsed.french_translations.filter(Boolean)
         : [parsed.french_translations].filter(Boolean),
+      notes: notes,
+      exampleSentence: notes,
       source: `✨ Google Gemini IA (${usedModel})`,
-      rawResponse: parsed
+      rawResponse: {
+        ...parsed,
+        notes: notes
+      }
     };
+  },
+
+  /**
+   * Génère la note de contexte en français pour un mot existant via Gemini
+   */
+  generateContextNoteWithGemini: async (word, apiKey) => {
+    const prompt = `Tu es un dictionnaire bilingue anglais-français de référence.
+Pour le mot anglais suivant et ses traductions françaises :
+- Mot anglais : "${word.english_word}"
+- Nature grammaticale : "${word.part_of_speech || 'noun'}"
+- Traductions françaises : ${JSON.stringify(word.french_translations || [])}
+
+Rédige une courte note en FRANÇAIS (1 phrase courte, entre 8 et 25 mots) précisant le contexte d'usage, le sens propre/figuré ou les nuances (comme dans un dictionnaire bilingue).
+Exemples :
+- Pour "To discover" -> "S'emploie au sens propre (un lieu, une invention) comme au sens figuré (apprendre un fait, constater)."
+- Pour "Rife" -> "Indique quelque chose de très répandu, souvent appliqué à des rumeurs, maladies ou abus."
+- Pour "To boast" -> "Désigne l'action de se vanter avec fierté ou excès de ses mérites."
+
+Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
+{
+  "notes": "..."
+}`;
+
+    const key = apiKey.trim();
+    const availableModels = await translationService.getAvailableModels(key);
+    let lastError = null;
+    let data = null;
+
+    for (const m of availableModels) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/${m.version}/models/${m.id}:generateContent?key=${key}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1 }
+          })
+        });
+
+        if (response.ok) {
+          data = await response.json();
+          break;
+        } else {
+          const err = await response.json().catch(() => ({}));
+          lastError = err.error?.message || `Erreur API Gemini (${response.status})`;
+        }
+      } catch (e) {
+        lastError = e.message;
+      }
+    }
+
+    if (!data) throw new Error(lastError || "Échec génération note Gemini");
+
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) return "";
+
+    let text = rawText.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    try {
+      const parsed = JSON.parse(text);
+      return (parsed.notes || "").trim();
+    } catch {
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (start !== -1 && end > start) {
+        const parsed = JSON.parse(text.substring(start, end + 1));
+        return (parsed.notes || "").trim();
+      }
+      return text.replace(/^{|"notes":|"|}$/g, "").trim();
+    }
   },
 
   /**

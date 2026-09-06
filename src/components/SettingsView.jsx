@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { 
   Download, 
   Upload, 
@@ -18,7 +18,9 @@ import {
   Database,
   ChevronDown,
   ChevronUp,
-  ArrowUpRight
+  ArrowUpRight,
+  Sparkles,
+  Info
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { storageService } from "../services/storageService";
@@ -33,6 +35,11 @@ export function SettingsView({ words, onWordsUpdate }) {
   // Gemini API Key
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
+
+  // Batch Context Enrichment state
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState({ current: 0, total: 0, currentWord: "" });
+  const cancelEnrichRef = useRef(false);
 
   // Supabase Sync Config
   const [syncConfig, setSyncConfig] = useState(syncService.getConfig());
@@ -150,12 +157,78 @@ export function SettingsView({ words, onWordsUpdate }) {
     }
   };
 
+  const missingContextWords = useMemo(() => {
+    return words.filter((w) => !w.exampleSentence && !w.notes);
+  }, [words]);
+
+  const handleBatchEnrichContext = async () => {
+    const apiKey = translationService.getGeminiApiKey();
+    if (!apiKey) {
+      showNotif("Veuillez d'abord configurer et enregistrer votre clé API Gemini ci-dessous.", "error");
+      return;
+    }
+
+    if (missingContextWords.length === 0) {
+      showNotif("Tous vos mots possèdent déjà leur note de contexte ! 🎉");
+      return;
+    }
+
+    setIsEnriching(true);
+    cancelEnrichRef.current = false;
+    setEnrichProgress({ current: 0, total: missingContextWords.length, currentWord: "" });
+
+    let successCount = 0;
+    let errors = 0;
+
+    for (let i = 0; i < missingContextWords.length; i++) {
+      if (cancelEnrichRef.current) break;
+      const word = missingContextWords[i];
+      setEnrichProgress({
+        current: i + 1,
+        total: missingContextWords.length,
+        currentWord: word.english_word
+      });
+
+      try {
+        const note = await translationService.generateContextNoteWithGemini(word, apiKey);
+        if (note) {
+          storageService.updateWord(word.id, {
+            exampleSentence: note,
+            notes: note
+          });
+          successCount++;
+        }
+      } catch (err) {
+        console.warn(`Erreur génération note pour ${word.english_word}:`, err);
+        errors++;
+      }
+
+      // Petite pause entre chaque requête pour respecter les quotas
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    setIsEnriching(false);
+    const updatedWords = storageService.getWords();
+    onWordsUpdate(updatedWords);
+
+    if (cancelEnrichRef.current) {
+      showNotif(`Enrichissement interrompu (${successCount} mots mis à jour sur Supabase)`);
+    } else {
+      showNotif(`✅ ${successCount} mots enrichis avec succès et synchronisés sur Supabase !`);
+    }
+  };
+
+  const handleCancelEnrich = () => {
+    cancelEnrichRef.current = true;
+  };
+
   const sqlScript = `-- 1. Table des mots de vocabulaire
 create table if not exists public.words (
   id text primary key,
   english_word text not null,
   part_of_speech text default 'noun',
   french_translations jsonb not null default '[]'::jsonb,
+  example_sentence text,
   success_count integer default 0,
   learned boolean default false,
   srs_stage integer default 0,
@@ -169,7 +242,8 @@ create table if not exists public.words (
   updated_at timestamptz default now()
 );
 
--- Si la table existait déjà, ajouter les nouvelles colonnes SRS en toute sécurité
+-- Si la table existait déjà, ajouter les nouvelles colonnes en toute sécurité
+alter table public.words add column if not exists example_sentence text;
 alter table public.words add column if not exists srs_stage integer default 0;
 alter table public.words add column if not exists first_learned_at timestamptz;
 alter table public.words add column if not exists next_review_at timestamptz;
@@ -543,6 +617,78 @@ create policy "Allow public access on quiz_stats" on public.quiz_stats
             </a>
           </div>
         </div>
+      </div>
+
+      {/* SECTION ENRICHISSEMENT DES NOTES DE CONTEXTE IA */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-amber-500" />
+            <h2 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+              Notes de contexte & Nuances (IA)
+            </h2>
+          </div>
+          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+            missingContextWords.length === 0
+              ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+              : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+          }`}>
+            {missingContextWords.length === 0
+              ? "✅ 100% à jour"
+              : `${missingContextWords.length} mot${missingContextWords.length > 1 ? "s" : ""} à enrichir`}
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+          Générez ou complétez automatiquement les notes de contexte en jaune italique (ex : <i>« S'emploie au sens propre comme au sens figuré... »</i>) pour tous les mots déjà enregistrés dans votre base Supabase.
+        </p>
+
+        {isEnriching ? (
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-2xl space-y-2">
+            <div className="flex items-center justify-between text-xs font-semibold text-amber-900 dark:text-amber-200">
+              <span className="flex items-center gap-1.5">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                <span>Enrichissement en cours : « {enrichProgress.currentWord} »</span>
+              </span>
+              <span>{enrichProgress.current} / {enrichProgress.total}</span>
+            </div>
+            
+            {/* Barre de progression */}
+            <div className="w-full bg-amber-200/60 dark:bg-amber-900/50 rounded-full h-2 overflow-hidden">
+              <div 
+                className="bg-amber-500 h-full transition-all duration-300 rounded-full"
+                style={{ width: `${(enrichProgress.current / (enrichProgress.total || 1)) * 100}%` }}
+              />
+            </div>
+
+            <button
+              onClick={handleCancelEnrich}
+              className="w-full py-1.5 bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 rounded-xl text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Arrêter l'enrichissement
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1 font-medium">
+              <span>Mots avec contexte : <b>{words.length - missingContextWords.length} / {words.length}</b></span>
+              <span>À traiter : <b>{missingContextWords.length}</b></span>
+            </div>
+
+            <button
+              onClick={handleBatchEnrichContext}
+              disabled={missingContextWords.length === 0}
+              className="w-full py-2.5 px-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>
+                {missingContextWords.length === 0 
+                  ? "Tous les mots ont déjà leur note de contexte"
+                  : `✨ Générer les notes de contexte manquantes sur Supabase (${missingContextWords.length})`}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Sauvegarde & Export Local */}

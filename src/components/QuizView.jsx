@@ -394,9 +394,11 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
               </div>
             </div>
 
-            {/* Mot en français demandé (sens précis) */}
+            {/* Mot en français demandé (sens précis) avec rappel grammatical contextuel */}
             <div className="my-4 text-center">
-              <span className="text-[11px] text-slate-400 font-medium block mb-0.5">Traduisez en anglais :</span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-full text-xs font-semibold mb-2">
+                Traduisez {posInfo.promptFr || "ce mot"} en anglais :
+              </span>
               <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
                 « {displayedPrompt} »
               </h1>
@@ -407,11 +409,11 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 </p>
               )}
 
-              {/* Phrase d'exemple / Indice contextuel si présent */}
-              {currentWord?.exampleSentence && (
-                <div className="mt-2.5 px-3 py-1.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-xs text-slate-600 dark:text-slate-300 italic flex items-center justify-center gap-1.5">
-                  <Info className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                  <span>« {currentWord.exampleSentence} »</span>
+              {/* Note de contexte / Précision de sens en jaune/ambre italique */}
+              {(currentWord?.exampleSentence || currentWord?.notes) && (
+                <div className="mt-3 px-3.5 py-2 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300 italic flex items-center justify-center gap-2 shadow-xs text-center">
+                  <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>{currentWord.exampleSentence || currentWord.notes}</span>
                 </div>
               )}
             </div>
@@ -461,13 +463,17 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                     type="text"
                     value={userAnswer}
                     onChange={(e) => setUserAnswer(e.target.value)}
-                    placeholder="Tapez le mot ou l'expression en anglais..."
+                    placeholder={posInfo.placeholder || "Tapez votre réponse en anglais..."}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck="false"
                     className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-2xl text-base font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-600 focus:bg-white dark:focus:bg-slate-800 transition"
                   />
                 </div>
+
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 text-center font-medium">
+                  💡 Les particules (to, a/the, one's...) sont facultatives
+                </p>
 
                 <button
                   type="submit"

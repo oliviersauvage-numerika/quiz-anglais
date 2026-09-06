@@ -207,48 +207,121 @@ export const srsService = {
     return reviewDate <= currentDate;
   },
 
-  // Normalisation linguistique rigoureuse par catégorie grammaticale
-  normalize: (text, partOfSpeech = "") => {
-    let clean = (text || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[’']/g, "'")
-      .replace(/\s+/g, " ");
+  // Extraction des variantes linguistiques tolérées (articles, infinitif to, pronoms impersonnels)
+  getNormalizedVariants: (text, partOfSpeech = "") => {
+    if (!text || typeof text !== "string") return [];
 
     const pos = (partOfSpeech || "").toLowerCase().trim();
 
-    // Règle 1 : Retirer 'to ' UNIQUEMENT pour les verbes
-    if (pos === "verb") {
-      clean = clean.replace(/^to\s+/i, "").trim();
+    // 1. Nettoyage de base (apostrophes typographiques, ponctuation finale, espaces)
+    let raw = text
+      .trim()
+      .toLowerCase()
+      .replace(/[’‘`]/g, "'")
+      .replace(/[.,!?;:]+$/g, "")
+      .replace(/\s+/g, " ");
+
+    if (!raw) return [];
+
+    const forms = new Set([raw]);
+
+    // Gestion du contenu entre parenthèses facultatif (ex: "look after (someone)" -> "look after" et "look after someone")
+    if (raw.includes("(") && raw.includes(")")) {
+      const withoutParens = raw.replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+      if (withoutParens) forms.add(withoutParens);
+      const withParensStripped = raw.replace(/[()]/g, "").replace(/\s+/g, " ").trim();
+      if (withParensStripped) forms.add(withParensStripped);
     }
 
-    // Règle 2 : Retirer les articles 'a', 'an', 'the' UNIQUEMENT pour les noms
-    if (pos === "noun") {
-      clean = clean.replace(/^(a|an|the)\s+/i, "").trim();
-    }
+    const processed = new Set();
 
-    return clean;
+    forms.forEach((str) => {
+      let clean = str;
+
+      // Retrait initial de 'to ' pour verbes, expressions ou saisies libres
+      if (pos === "verb" || pos === "expression" || /^to\s+/i.test(clean)) {
+        if (pos !== "adverb" && pos !== "adjective") {
+          clean = clean.replace(/^to\s+/i, "").trim();
+        }
+      }
+
+      // Retrait initial des articles 'a', 'an', 'the'
+      if (pos === "noun" || pos === "expression" || /^(a|an|the)\s+/i.test(clean)) {
+        if (pos !== "adverb" && pos !== "adjective") {
+          clean = clean.replace(/^(a|an|the)\s+/i, "").trim();
+        }
+      }
+
+      if (clean) {
+        processed.add(clean);
+
+        // Variante sans articles internes (ex: "give a hand" -> "give hand")
+        const withoutArticles = clean
+          .replace(/\b(a|an|the)\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (withoutArticles && withoutArticles.length > 0) {
+          processed.add(withoutArticles);
+        }
+
+        // Variante sans pronoms possessifs impersonnels (one's, someone's, etc.)
+        const strippedPossessives = clean
+          .replace(/\b(one's|someone's|somebody's|your|my|his|her|their|our)\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (strippedPossessives && strippedPossessives.length > 0) {
+          processed.add(strippedPossessives);
+        }
+
+        // Variante sans pronoms réfléchis et indéfinis impersonnels
+        const strippedPronouns = clean
+          .replace(/\b(oneself|yourself|himself|herself|itself|themselves|ourselves|someone|somebody|one|person|something|sb|sth)\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (strippedPronouns && strippedPronouns.length > 0) {
+          processed.add(strippedPronouns);
+        }
+
+        // Variante combinée globale (sans articles, ni particules, ni pronoms impersonnels)
+        const combined = clean
+          .replace(/\b(a|an|the|to|one's|someone's|somebody's|your|my|his|her|their|our|oneself|yourself|himself|herself|itself|themselves|ourselves|someone|somebody|one|person|something|sb|sth)\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (combined && combined.length > 0) {
+          processed.add(combined);
+        }
+      }
+    });
+
+    return Array.from(processed);
   },
 
-  // Vérification de la réponse contre toutes les réponses acceptées
+  // Normalisation linguistique (forme canonique par défaut)
+  normalize: (text, partOfSpeech = "") => {
+    const variants = srsService.getNormalizedVariants(text, partOfSpeech);
+    return variants[0] || (text || "").trim().toLowerCase();
+  },
+
+  // Vérification de la réponse contre toutes les réponses acceptées avec tolérance linguistique
   checkAnswer: (userAnswer, word) => {
     if (!word || !userAnswer) return false;
 
     const pos = word.part_of_speech || "";
-    const normalizedUser = srsService.normalize(userAnswer, pos);
-    if (!normalizedUser) return false;
+    const userVariants = srsService.getNormalizedVariants(userAnswer, pos);
+    if (userVariants.length === 0) return false;
 
     const candidates = [
       word.english_word,
       ...(Array.isArray(word.accepted_answers) ? word.accepted_answers : [])
     ].filter(Boolean);
 
-    // Élimination des doublons après normalisation
-    const normalizedCandidates = Array.from(
-      new Set(candidates.map((c) => srsService.normalize(c, pos)))
-    );
+    const targetVariants = new Set();
+    candidates.forEach((c) => {
+      srsService.getNormalizedVariants(c, pos).forEach((v) => targetVariants.add(v));
+    });
 
-    return normalizedCandidates.some((target) => target === normalizedUser);
+    // Tolérance : vrai si au moins une variante utilisateur correspond à une variante cible
+    return userVariants.some((uv) => targetVariants.has(uv));
   },
 
   // Machine à états et règles de transition SRS protégées selon le QuizMode

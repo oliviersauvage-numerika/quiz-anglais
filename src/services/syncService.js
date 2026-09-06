@@ -435,16 +435,27 @@ class SyncService {
       if (updates.lastCorrect !== undefined) dbUpdates.last_correct = updates.lastCorrect;
       if (updates.last_correct !== undefined) dbUpdates.last_correct = updates.last_correct;
 
-      const { data, error } = await this.client
+      // 1. Tenter la mise à jour par ID
+      let { data, error } = await this.client
         .from("words")
         .update(dbUpdates)
-        .eq("id", id)
-        .select()
-        .single();
+        .eq("id", String(id))
+        .select();
+
+      // 2. Si aucun enregistrement n'a été trouvé par ID et qu'on a le mot anglais, tenter par english_word
+      if (!error && (!data || data.length === 0) && updates.english_word) {
+        const res = await this.client
+          .from("words")
+          .update(dbUpdates)
+          .ilike("english_word", updates.english_word.trim())
+          .select();
+        data = res.data;
+        error = res.error;
+      }
 
       if (error) throw error;
       this.lastSyncedAt = new Date();
-      return { success: true, word: data ? fromDBWord(data) : null };
+      return { success: true, word: data && data[0] ? fromDBWord(data[0]) : null };
     } catch (err) {
       console.error("Erreur update Supabase :", err);
       return { success: false, error: err.message };

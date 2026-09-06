@@ -175,7 +175,15 @@ export function SettingsView({ words, onWordsUpdate }) {
 
     setIsEnriching(true);
     cancelEnrichRef.current = false;
-    setEnrichProgress({ current: 0, total: missingContextWords.length, currentWord: "" });
+    setEnrichProgress({ current: 0, total: missingContextWords.length, currentWord: "Vérification de l'accès Gemini..." });
+
+    // 1. Tester la clé Gemini avant de lancer le lot
+    const testKey = await translationService.testGeminiKey(apiKey);
+    if (!testKey.success) {
+      showNotif(`⚠️ Clé Gemini invalide ou inaccessible : ${testKey.error}`, "error");
+      setIsEnriching(false);
+      return;
+    }
 
     let successCount = 0;
     let errors = 0;
@@ -238,6 +246,10 @@ export function SettingsView({ words, onWordsUpdate }) {
 
     if (cancelEnrichRef.current) {
       showNotif(`Enrichissement interrompu (${successCount} mots mis à jour sur Supabase)`);
+    } else if (successCount === 0 && errors > 0) {
+      showNotif(`⚠️ Échec : aucune note générée (${errors} erreurs API). Vérifiez vos quotas Gemini.`, "error");
+    } else if (errors > 0) {
+      showNotif(`⚠️ ${successCount} mots enrichis sur Supabase (${errors} erreurs sur certains mots).`);
     } else {
       showNotif(`✅ ${successCount} mots enrichis avec succès et synchronisés sur Supabase !`);
     }

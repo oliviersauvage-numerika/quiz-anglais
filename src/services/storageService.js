@@ -183,15 +183,21 @@ export const storageService = {
   },
 
   // Mettre à jour un mot
-  updateWord: (id, updates) => {
+  updateWord: async (id, updates) => {
     const words = storageService.getWords();
     const updated = words.map((w) => (w.id === id ? srsService.sanitizeWord({ ...w, ...updates }) : w));
     storageService.saveWordsLocally(updated);
 
     // Synchronisation en base de données Supabase
-    syncService.updateWord(id, updates);
+    let syncRes = null;
+    try {
+      syncRes = await syncService.updateWord(id, updates);
+    } catch (e) {
+      console.warn("Erreur mise à jour Supabase :", e);
+      syncRes = { success: false, error: e.message };
+    }
 
-    return updated;
+    return { words: updated, syncRes };
   },
 
   // Supprimer un mot

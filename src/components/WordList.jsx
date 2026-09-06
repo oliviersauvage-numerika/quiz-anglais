@@ -363,10 +363,10 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                     </div>
 
                     {/* Note de contexte / Précision de sens */}
-                    {(word.exampleSentence || word.notes) && (
+                    {(word.exampleSentence || word.example_sentence || word.notes) && (
                       <p className="text-[11px] text-amber-700/90 dark:text-amber-300/80 italic mt-1.5 flex items-start gap-1">
                         <span className="font-semibold not-italic text-amber-600 dark:text-amber-400">💡</span>
-                        <span>{word.exampleSentence || word.notes}</span>
+                        <span>{word.exampleSentence || word.example_sentence || word.notes}</span>
                       </p>
                     )}
 

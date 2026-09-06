@@ -410,10 +410,10 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
               )}
 
               {/* Note de contexte / Précision de sens en jaune/ambre italique */}
-              {(currentWord?.exampleSentence || currentWord?.notes) && (
+              {(currentWord?.exampleSentence || currentWord?.example_sentence || currentWord?.notes) && (
                 <div className="mt-3 px-3.5 py-2 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300 italic flex items-center justify-center gap-2 shadow-xs text-center">
                   <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span>{currentWord.exampleSentence || currentWord.notes}</span>
+                  <span>{currentWord.exampleSentence || currentWord.example_sentence || currentWord.notes}</span>
                 </div>
               )}
             </div>

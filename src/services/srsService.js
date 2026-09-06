@@ -163,7 +163,8 @@ export const srsService = {
       lastSrsReviewAt,
       accepted_answers: acceptedAnswers,
       frenchPrompt: word.frenchPrompt || word.french_prompt || undefined,
-      exampleSentence: word.exampleSentence || word.example_sentence || undefined,
+      exampleSentence: word.exampleSentence || word.example_sentence || word.notes || undefined,
+      notes: word.notes || word.exampleSentence || word.example_sentence || undefined,
       senseId: word.senseId || word.sense_id || undefined,
       // Champs de compatibilité
       successCount: learningSuccessCount,

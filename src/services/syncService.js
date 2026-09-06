@@ -414,6 +414,9 @@ class SyncService {
       if (updates.english_word !== undefined) dbUpdates.english_word = updates.english_word.trim();
       if (updates.part_of_speech !== undefined) dbUpdates.part_of_speech = updates.part_of_speech.trim().toLowerCase();
       if (updates.french_translations !== undefined) dbUpdates.french_translations = updates.french_translations;
+      if (updates.exampleSentence !== undefined) dbUpdates.example_sentence = updates.exampleSentence;
+      if (updates.example_sentence !== undefined) dbUpdates.example_sentence = updates.example_sentence;
+      if (updates.notes !== undefined) dbUpdates.example_sentence = updates.notes;
       if (updates.successCount !== undefined) dbUpdates.success_count = updates.successCount;
       if (updates.success_count !== undefined) dbUpdates.success_count = updates.success_count;
       if (updates.learned !== undefined) dbUpdates.learned = updates.learned;

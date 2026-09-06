@@ -179,6 +179,7 @@ export function SettingsView({ words, onWordsUpdate }) {
 
     let successCount = 0;
     let errors = 0;
+    let fatalSupabaseError = null;
 
     for (let i = 0; i < missingContextWords.length; i++) {
       if (cancelEnrichRef.current) break;
@@ -192,14 +193,26 @@ export function SettingsView({ words, onWordsUpdate }) {
       try {
         const note = await translationService.generateContextNoteWithGemini(word, apiKey);
         if (note) {
-          storageService.updateWord(word.id, {
+          const res = await storageService.updateWord(word.id, {
             exampleSentence: note,
+            example_sentence: note,
             notes: note
           });
+
+          if (res?.syncRes && !res.syncRes.success && res.syncRes.error) {
+            console.error("Erreur mise à jour Supabase :", res.syncRes.error);
+            const errMsg = String(res.syncRes.error);
+            if (errMsg.includes("example_sentence") || errMsg.includes("column")) {
+              fatalSupabaseError = `La colonne 'example_sentence' n'existe pas encore dans votre base Supabase. Veuillez copier et exécuter le script SQL dans Supabase (SQL Editor).`;
+              break;
+            }
+          }
           successCount++;
+        } else {
+          console.warn(`Aucune note générée par Gemini pour : ${word.english_word}`);
         }
       } catch (err) {
-        console.warn(`Erreur génération note pour ${word.english_word}:`, err);
+        console.error(`Erreur génération note pour ${word.english_word}:`, err);
         errors++;
       }
 
@@ -210,6 +223,18 @@ export function SettingsView({ words, onWordsUpdate }) {
     setIsEnriching(false);
     const updatedWords = storageService.getWords();
     onWordsUpdate(updatedWords);
+
+    if (fatalSupabaseError) {
+      showNotif(`⚠️ ${fatalSupabaseError}`, "error");
+      return;
+    }
+
+    // Synchronisation en masse pour garantir l'enregistrement complet sur Supabase
+    try {
+      await syncService.migrateWords(updatedWords);
+    } catch (e) {
+      console.warn("Synchronisation globale après enrichissement :", e);
+    }
 
     if (cancelEnrichRef.current) {
       showNotif(`Enrichissement interrompu (${successCount} mots mis à jour sur Supabase)`);

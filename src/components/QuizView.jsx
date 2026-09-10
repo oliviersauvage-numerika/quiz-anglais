@@ -14,7 +14,8 @@ import {
   Clock,
   BookOpen,
   Zap,
-  Info
+  Info,
+  AlertCircle
 } from "lucide-react";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 import { storageService } from "../services/storageService";
@@ -38,10 +39,15 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   const [userAnswer, setUserAnswer] = useState("");
   const [quizState, setQuizState] = useState("answering"); // "answering" | "correct" | "incorrect"
   const [lastUpdatedWord, setLastUpdatedWord] = useState(null);
+  const [emptyAnswerWarning, setEmptyAnswerWarning] = useState(null);
+
+  // Instantané du résultat pour découplage strict avec les révisions encore dues et Supabase Realtime
+  const [resultSnapshot, setResultSnapshot] = useState(null);
   
   const [roundQueue, setRoundQueue] = useState([]);
   const recentWordIdsRef = useRef([]); // Historique des 2 derniers IDs posés pour anti-répétition
   const inputRef = useRef(null);
+  const isSubmittingRef = useRef(false); // Verrou anti-double validation
 
   // Reconnaissance vocale (Speech-to-Text)
   const [isListening, setIsListening] = useState(false);
@@ -79,10 +85,15 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     stopListening();
     if (candidateWords.length === 0) {
       setCurrentWord(null);
+      setQuizState("answering");
+      setLastUpdatedWord(null);
+      setResultSnapshot(null);
+      isSubmittingRef.current = false;
       return;
     }
 
     let queue = [...roundQueue];
+    // Ne conserver que les IDs qui font toujours partie des candidats éligibles
     queue = queue.filter((id) => candidateWords.some((w) => String(w.id) === String(id)));
 
     if (queue.length === 0) {
@@ -91,6 +102,10 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
     if (queue.length === 0) {
       setCurrentWord(null);
+      setQuizState("answering");
+      setLastUpdatedWord(null);
+      setResultSnapshot(null);
+      isSubmittingRef.current = false;
       return;
     }
 
@@ -115,13 +130,36 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     setDisplayedPrompt(prompt);
     setRoundQueue(queue);
     setUserAnswer("");
+    setEmptyAnswerWarning(null);
     setQuizState("answering");
     setLastUpdatedWord(null);
+    setResultSnapshot(null);
+    isSubmittingRef.current = false;
   };
 
-  // Réinitialiser la question si le mode change ou si le mot actuel n'est plus candidat
-  useEffect(() => {
+  // Changement explicite de mode de quiz
+  const handleModeChange = (newMode) => {
+    if (newMode === quizMode) return;
+    stopListening();
+    setQuizMode(newMode);
+    setCurrentWord(null);
+    setDisplayedPrompt("");
+    setUserAnswer("");
+    setEmptyAnswerWarning(null);
+    setQuizState("answering");
+    setLastUpdatedWord(null);
+    setResultSnapshot(null);
     setRoundQueue([]);
+    isSubmittingRef.current = false;
+  };
+
+  // Synchronisation des questions : déclenchée uniquement en état "answering"
+  // Ne JAMAIS interrompre la lecture d'un résultat en cours d'affichage
+  useEffect(() => {
+    if (quizState !== "answering") {
+      return;
+    }
+
     if (candidateWords.length > 0) {
       if (!currentWord || !candidateWords.some((w) => String(w.id) === String(currentWord.id))) {
         pickNextQuestion();
@@ -129,8 +167,9 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     } else {
       setCurrentWord(null);
     }
-  }, [quizMode, candidateWords.length]);
+  }, [quizMode, candidateWords.length, quizState]);
 
+  // Focus automatique de l'input lors du passage à une nouvelle question
   useEffect(() => {
     if (quizState === "answering" && inputRef.current) {
       setTimeout(() => {
@@ -138,6 +177,18 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       }, 50);
     }
   }, [quizState, currentWord]);
+
+  // Raccourci clavier : touche Entrée pour passer à la question suivante lors de l'affichage du résultat
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Enter" && (quizState === "correct" || quizState === "incorrect")) {
+        e.preventDefault();
+        handleNext();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [quizState, resultSnapshot]);
 
   // Nettoyage speech recognition
   useEffect(() => {
@@ -151,6 +202,8 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   }, []);
 
   const startListening = () => {
+    if (quizState !== "answering") return;
+
     if (!isSpeechSupported) {
       setSpeechError("La reconnaissance vocale n'est pas disponible sur ce navigateur.");
       return;
@@ -174,6 +227,8 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       };
 
       recognition.onresult = (event) => {
+        if (quizState !== "answering" || isSubmittingRef.current) return;
+
         const transcript = Array.from(event.results)
           .map((result) => result[0].transcript)
           .join("");
@@ -181,6 +236,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
         if (transcript) {
           const cleaned = transcript.trim().replace(/\.$/, "");
           setUserAnswer(cleaned);
+          setEmptyAnswerWarning(null);
         }
       };
 
@@ -219,19 +275,65 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
   };
 
+  // Soumission et validation de la réponse
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
     stopListening();
-    if (quizState !== "answering" || !userAnswer.trim() || !currentWord) return;
 
-    // Évaluation via la fonction centralisée tolérant toutes les réponses acceptées
-    const isCorrect = srsService.checkAnswer(userAnswer, currentWord);
+    // 1. Protection anti-double validation
+    if (isSubmittingRef.current || quizState !== "answering") {
+      return;
+    }
 
+    // 2. Gestion réponse vide sans la comptabiliser comme une erreur
+    const trimmedAnswer = userAnswer.trim();
+    if (!trimmedAnswer) {
+      setEmptyAnswerWarning("Saisis une réponse avant de valider");
+      inputRef.current?.focus();
+      return;
+    }
+
+    setEmptyAnswerWarning(null);
+    if (!currentWord) return;
+
+    isSubmittingRef.current = true;
+
+    // 3. Évaluation via srsService.checkAnswer (moteur centralisé avec tolérances linguistiques)
+    const isCorrect = srsService.checkAnswer(trimmedAnswer, currentWord);
+
+    // 4. Détection si c'est la dernière question de la session
+    let isLast = false;
+    if (quizMode === "srs-review") {
+      const remainingDue = dueReviews.filter((w) => String(w.id) !== String(currentWord.id));
+      isLast = remainingDue.length === 0;
+    } else if (quizMode === "initial-learning") {
+      const remainingLearning = learningWords.filter((w) => String(w.id) !== String(currentWord.id));
+      const willGraduate = isCorrect && ((currentWord.learningSuccessCount || 0) + 1 >= 3);
+      isLast = remainingLearning.length === 0 && willGraduate;
+    } else {
+      // free-practice
+      const queueRemaining = roundQueue.filter((id) => String(id) !== String(currentWord.id));
+      isLast = words.length <= 1 || queueRemaining.length === 0;
+    }
+
+    // 5. Enregistrement Local-First
     const { words: updatedWords, updatedWord } = storageService.recordQuizResult(
       currentWord.id, 
       isCorrect, 
       quizMode
     );
+
+    // 6. Sauvegarde de l'instantané indépendant
+    setResultSnapshot({
+      word: currentWord,
+      displayedPrompt,
+      userAnswer: trimmedAnswer,
+      isCorrect,
+      updatedWord,
+      isLastQuestion: isLast,
+      quizMode
+    });
+
     onWordsUpdate(updatedWords);
     setLastUpdatedWord(updatedWord);
 
@@ -258,12 +360,40 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
   };
 
-  const posInfo = PART_OF_SPEECH_LABELS[currentWord?.part_of_speech] || {
-    fr: currentWord?.part_of_speech,
+  // Passage à la question suivante ou écran de fin
+  const handleNext = () => {
+    isSubmittingRef.current = false;
+    const wasLast = resultSnapshot?.isLastQuestion;
+
+    setResultSnapshot(null);
+    setEmptyAnswerWarning(null);
+
+    if (wasLast) {
+      // Fin de la session
+      setCurrentWord(null);
+      setQuizState("answering");
+      setLastUpdatedWord(null);
+      setUserAnswer("");
+      setRoundQueue([]);
+      return;
+    }
+
+    pickNextQuestion();
+  };
+
+  // Références stables pour l'affichage (priorité au snapshot pendant la lecture du résultat)
+  const activeWord = resultSnapshot ? resultSnapshot.word : currentWord;
+  const activePrompt = resultSnapshot ? resultSnapshot.displayedPrompt : displayedPrompt;
+  const isLastQuestion = resultSnapshot ? resultSnapshot.isLastQuestion : false;
+  const activeUpdatedWord = resultSnapshot?.updatedWord || lastUpdatedWord;
+  const activeUserAnswer = resultSnapshot?.userAnswer ?? userAnswer;
+
+  const posInfo = PART_OF_SPEECH_LABELS[activeWord?.part_of_speech] || {
+    fr: activeWord?.part_of_speech,
     color: "bg-slate-100 text-slate-800 border-slate-200"
   };
 
-  const currentStageInfo = srsService.getStageInfo(currentWord?.srsStage || (currentWord?.learned ? 1 : 0));
+  const currentStageInfo = srsService.getStageInfo(activeWord?.srsStage || (activeWord?.learned ? 1 : 0));
 
   return (
     <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-1 pb-24 space-y-3">
@@ -271,7 +401,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       {/* Sélecteur de Mode de Quiz explicite */}
       <div className="bg-slate-200/70 dark:bg-slate-900 p-1 rounded-2xl flex items-center gap-1 border border-slate-200 dark:border-slate-800">
         <button
-          onClick={() => setQuizMode("srs-review")}
+          onClick={() => handleModeChange("srs-review")}
           className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 ${
             quizMode === "srs-review"
               ? "bg-amber-500 text-white shadow-xs"
@@ -290,7 +420,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
         </button>
 
         <button
-          onClick={() => setQuizMode("initial-learning")}
+          onClick={() => handleModeChange("initial-learning")}
           className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 ${
             quizMode === "initial-learning"
               ? "bg-indigo-600 text-white shadow-xs"
@@ -309,7 +439,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
         </button>
 
         <button
-          onClick={() => setQuizMode("free-practice")}
+          onClick={() => handleModeChange("free-practice")}
           className={`flex-1 py-1.5 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 ${
             quizMode === "free-practice"
               ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-xs"
@@ -322,7 +452,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       </div>
 
       {/* État vide explicite lorsque le mode sélectionné n'a plus de cartes */}
-      {candidateWords.length === 0 ? (
+      {!activeWord || (candidateWords.length === 0 && quizState === "answering") ? (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center animate-fade-in bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-xl shadow-slate-200/50 dark:shadow-none min-h-[380px]">
           <div className="w-16 h-16 bg-gradient-to-tr from-emerald-400 to-teal-500 rounded-3xl shadow-lg shadow-emerald-500/20 flex items-center justify-center text-white mb-4 animate-pop-in">
             <Award className="w-8 h-8" />
@@ -347,7 +477,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
           <div className="w-full space-y-2.5 max-w-xs">
             {quizMode !== "free-practice" && words.length > 0 && (
               <button
-                onClick={() => setQuizMode("free-practice")}
+                onClick={() => handleModeChange("free-practice")}
                 className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-2xl shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 active:scale-95 transition"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -388,7 +518,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 ) : (
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 flex items-center gap-1">
                     <Zap className="w-3 h-3 text-indigo-600" />
-                    <span>{currentWord?.learningSuccessCount || 0}/3 ★ consécutifs</span>
+                    <span>{activeWord?.learningSuccessCount || 0}/3 ★ consécutifs</span>
                   </span>
                 )}
               </div>
@@ -400,20 +530,20 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 Traduisez {posInfo.promptFr || "ce mot"} en anglais :
               </span>
               <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-                « {displayedPrompt} »
+                « {activePrompt} »
               </h1>
               
-              {currentWord?.french_translations && currentWord.french_translations.length > 1 && (
+              {activeWord?.french_translations && activeWord.french_translations.length > 1 && (
                 <p className="text-[11px] text-slate-400 mt-1">
-                  (Autres variantes : {currentWord.french_translations.filter((t) => t !== displayedPrompt).join(", ")})
+                  (Autres variantes : {activeWord.french_translations.filter((t) => t !== activePrompt).join(", ")})
                 </p>
               )}
 
               {/* Note de contexte / Précision de sens en jaune/ambre italique */}
-              {(currentWord?.exampleSentence || currentWord?.example_sentence || currentWord?.notes) && (
+              {(activeWord?.exampleSentence || activeWord?.example_sentence || activeWord?.notes) && (
                 <div className="mt-3 px-3.5 py-2 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300 italic flex items-center justify-center gap-2 shadow-xs text-center">
                   <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span>{currentWord.exampleSentence || currentWord.example_sentence || currentWord.notes}</span>
+                  <span>{activeWord.exampleSentence || activeWord.example_sentence || activeWord.notes}</span>
                 </div>
               )}
             </div>
@@ -462,14 +592,28 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                     ref={inputRef}
                     type="text"
                     value={userAnswer}
-                    onChange={(e) => setUserAnswer(e.target.value)}
+                    onChange={(e) => {
+                      setUserAnswer(e.target.value);
+                      if (emptyAnswerWarning) setEmptyAnswerWarning(null);
+                    }}
                     placeholder={posInfo.placeholder || "Tapez votre réponse en anglais..."}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck="false"
-                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-2xl text-base font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-600 focus:bg-white dark:focus:bg-slate-800 transition"
+                    className={`w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border-2 ${
+                      emptyAnswerWarning 
+                        ? "border-amber-400 dark:border-amber-500 ring-2 ring-amber-300/40" 
+                        : "border-slate-200 dark:border-slate-700"
+                    } rounded-2xl text-base font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-600 focus:bg-white dark:focus:bg-slate-800 transition`}
                   />
                 </div>
+
+                {emptyAnswerWarning && (
+                  <div className="p-2.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700/60 rounded-xl text-xs font-bold text-amber-800 dark:text-amber-200 flex items-center justify-center gap-1.5 animate-pop-in">
+                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>{emptyAnswerWarning}</span>
+                  </div>
+                )}
 
                 <p className="text-[11px] text-slate-400 dark:text-slate-500 text-center font-medium">
                   💡 Les particules (to, a/the, one's...) sont facultatives
@@ -477,8 +621,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
                 <button
                   type="submit"
-                  disabled={!userAnswer.trim()}
-                  className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold rounded-2xl shadow-md shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-95 transition"
+                  className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-2xl shadow-md shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-95 transition"
                 >
                   <span>Valider</span>
                   <ArrowRight className="w-4 h-4" />
@@ -487,44 +630,61 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
             )}
 
             {/* Feedback : Bonne réponse */}
-            {quizState === "correct" && (
+            {quizState === "correct" && activeWord && (
               <div className="space-y-3 animate-pop-in">
-                <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-2xl">
-                  <div className="flex items-start gap-2.5">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/50 border-2 border-emerald-300 dark:border-emerald-700 rounded-2xl shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-black text-emerald-900 dark:text-emerald-100">
-                          {currentWord.english_word}
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-sm font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-200">
+                          Bonne réponse !
                         </span>
                         <button
-                          onClick={() => playPronunciation(currentWord.english_word)}
-                          className="p-1 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900 rounded-full"
-                          title="Écouter"
+                          type="button"
+                          onClick={() => playPronunciation(activeWord.english_word)}
+                          className="p-1.5 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-full transition"
+                          title="Écouter la prononciation"
                         >
                           <Volume2 className="w-4 h-4" />
                         </button>
                       </div>
 
+                      <div className="mt-1">
+                        <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80 font-medium">
+                          Réponse attendue :
+                        </p>
+                        <p className="text-2xl font-black text-emerald-950 dark:text-emerald-50 tracking-tight">
+                          {activeWord.english_word}
+                        </p>
+                      </div>
+
+                      {/* Saisie de l'utilisateur si différente de la casse/forme principale */}
+                      {activeUserAnswer && activeUserAnswer.trim().toLowerCase() !== activeWord.english_word.trim().toLowerCase() && (
+                        <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
+                          Votre saisie : <span className="font-semibold">« {activeUserAnswer.trim()} »</span> (acceptée)
+                        </p>
+                      )}
+
                       {/* Explication du résultat selon le mode */}
-                      <div className="mt-1 text-xs text-emerald-800 dark:text-emerald-200 font-medium">
+                      <div className="mt-2.5 pt-2 border-t border-emerald-200/80 dark:border-emerald-800/60 text-xs text-emerald-800 dark:text-emerald-200 font-medium">
                         {quizMode === "free-practice" ? (
                           <p>🎯 Bonne réponse ! (Mode entraînement libre sans modification SRS)</p>
-                        ) : lastUpdatedWord?.isMastered ? (
+                        ) : activeUpdatedWord?.isMastered ? (
                           <p className="font-bold text-amber-800 dark:text-amber-200">
                             🏆 Palier 10 validé : Mot consolidé et maîtrisé !
                           </p>
-                        ) : lastUpdatedWord?.srsStage === 1 && !currentWord.learned ? (
+                        ) : activeUpdatedWord?.srsStage === 1 && !activeWord.learned ? (
                           <p className="font-bold">
                             🎉 3 réussites consécutives ! Promotion au Palier 1 (Revue demain J+1).
                           </p>
-                        ) : lastUpdatedWord?.srsStage > 0 ? (
+                        ) : activeUpdatedWord?.srsStage > 0 ? (
                           <p>
-                            ✅ <b>{srsService.getStageInfo(lastUpdatedWord.srsStage).label}</b> validé ! Prochaine révision : <b>{srsService.formatRelativeReviewDate(lastUpdatedWord.nextReviewAt)?.text}</b>.
+                            ✅ <b>{srsService.getStageInfo(activeUpdatedWord.srsStage).label}</b> validé ! Prochaine révision : <b>{srsService.formatRelativeReviewDate(activeUpdatedWord.nextReviewAt)?.text}</b>.
                           </p>
                         ) : (
                           <p>
-                            Bravo ! ({lastUpdatedWord?.learningSuccessCount || 0}/3 ★ consécutifs requis).
+                            Bravo ! ({activeUpdatedWord?.learningSuccessCount || 0}/3 ★ consécutifs requis).
                           </p>
                         )}
                       </div>
@@ -533,59 +693,78 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 </div>
 
                 <button
-                  onClick={pickNextQuestion}
+                  onClick={handleNext}
                   autoFocus
-                  className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md shadow-emerald-500/25 flex items-center justify-center gap-2 active:scale-95 transition text-xs"
+                  className={`w-full py-3.5 px-4 text-white font-bold rounded-2xl shadow-md flex items-center justify-center gap-2 active:scale-95 transition text-sm ${
+                    isLastQuestion 
+                      ? "bg-amber-600 hover:bg-amber-700 shadow-amber-500/25" 
+                      : "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/25"
+                  }`}
                 >
-                  <span>Question suivante</span>
+                  <span>{isLastQuestion ? (quizMode === "srs-review" ? "Terminer les révisions" : "Terminer la session") : "Question suivante"}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
             )}
 
             {/* Feedback : Mauvaise réponse */}
-            {quizState === "incorrect" && (
+            {quizState === "incorrect" && activeWord && (
               <div className="space-y-3 animate-shake">
-                <div className="p-3.5 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-2xl">
-                  <div className="flex items-start gap-2.5">
-                    <XCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                <div className="p-4 bg-rose-50 dark:bg-rose-950/50 border-2 border-rose-300 dark:border-rose-700 rounded-2xl shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <XCircle className="w-6 h-6 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold uppercase">
-                        La bonne réponse était :
-                      </p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xl font-black text-rose-950 dark:text-rose-100">
-                          {currentWord.english_word}
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-sm font-black uppercase tracking-wider text-rose-800 dark:text-rose-200">
+                          Réponse incorrecte
                         </span>
                         <button
-                          onClick={() => playPronunciation(currentWord.english_word)}
-                          className="p-1 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900 rounded-full"
-                          title="Écouter"
+                          type="button"
+                          onClick={() => playPronunciation(activeWord.english_word)}
+                          className="p-1.5 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 rounded-full transition"
+                          title="Écouter la prononciation"
                         >
                           <Volume2 className="w-4 h-4" />
                         </button>
                       </div>
 
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        Votre réponse : <span className="line-through">{userAnswer}</span>
-                      </p>
+                      <div className="mt-1.5">
+                        <p className="text-xs text-slate-600 dark:text-slate-400">
+                          Votre réponse : <span className="font-bold line-through text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/50 px-1.5 py-0.5 rounded">« {activeUserAnswer.trim() || "(vide)"} »</span>
+                        </p>
+                      </div>
+
+                      <div className="mt-2">
+                        <p className="text-xs text-slate-600 dark:text-slate-400 font-semibold uppercase">
+                          Réponse attendue :
+                        </p>
+                        <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                          {activeWord.english_word}
+                        </p>
+                      </div>
+
+                      {activeWord.accepted_answers && activeWord.accepted_answers.length > 0 && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                          Variantes acceptées : {activeWord.accepted_answers.join(", ")}
+                        </p>
+                      )}
 
                       {/* Explication de la rétrogradation */}
-                      <div className="mt-1.5 pt-1.5 border-t border-rose-200 dark:border-rose-900/60 text-[11px] text-rose-800 dark:text-rose-300">
+                      <div className="mt-2.5 pt-2 border-t border-rose-200/80 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 font-medium">
                         {quizMode === "free-practice" ? (
-                          <span>Entraînement libre : aucun impact sur vos paliers SRS.</span>
-                        ) : currentWord.srsStage >= 2 ? (
-                          <span>
-                            ↩️ Rétrogradation douce au <b>{srsService.getStageInfo(lastUpdatedWord?.srsStage || 0).label}</b> (Revue urgente demain à J+1).
-                          </span>
-                        ) : currentWord.srsStage === 1 ? (
-                          <span>
+                          <p>Entraînement libre : aucun impact sur vos paliers SRS.</p>
+                        ) : activeWord.srsStage >= 2 ? (
+                          <p>
+                            ↩️ Rétrogradation douce au <b>{srsService.getStageInfo(activeUpdatedWord?.srsStage || 0).label}</b> (Revue urgente demain à J+1).
+                          </p>
+                        ) : activeWord.srsStage === 1 ? (
+                          <p>
                             ↩️ Retour au palier d'apprentissage initial (0/3 ★).
-                          </span>
+                          </p>
                         ) : (
-                          <span>
-                            Compteur remis à 0/3 ★ consécutifs.
-                          </span>
+                          <p>
+                            Compteur d'apprentissage remis à 0/3 ★ consécutifs.
+                          </p>
                         )}
                       </div>
                     </div>
@@ -593,11 +772,11 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 </div>
 
                 <button
-                  onClick={pickNextQuestion}
+                  onClick={handleNext}
                   autoFocus
-                  className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 text-white font-bold rounded-2xl shadow-md flex items-center justify-center gap-2 active:scale-95 transition text-xs"
+                  className="w-full py-3.5 px-4 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 text-white font-bold rounded-2xl shadow-md flex items-center justify-center gap-2 active:scale-95 transition text-sm"
                 >
-                  <span>Continuer</span>
+                  <span>{isLastQuestion ? (quizMode === "srs-review" ? "Terminer les révisions" : "Terminer la session") : "Question suivante"}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>

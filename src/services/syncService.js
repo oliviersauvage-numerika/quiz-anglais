@@ -5,8 +5,8 @@ const SYNC_CODE_KEY = "quiz_anglais_sync_code";
 
 // Configuration par défaut ou stockée
 const DEFAULT_CONFIG = {
-  url: import.meta.env.VITE_SUPABASE_URL || "",
-  anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || "",
+  url: import.meta.env?.VITE_SUPABASE_URL || "",
+  anonKey: import.meta.env?.VITE_SUPABASE_ANON_KEY || "",
   syncCode: "",
   autoSync: true,
 };
@@ -18,6 +18,13 @@ export function toDBWord(w) {
     ? w.learningSuccessCount 
     : (typeof w.successCount === "number" ? w.successCount : (w.success_count || 0));
 
+  const stageEnFr = typeof w.srsStage_en_fr === "number" 
+    ? w.srsStage_en_fr 
+    : (typeof w.srs_stage_en_fr === "number" ? w.srs_stage_en_fr : (w.learned_en_fr ? 1 : 0));
+  const learningSuccessEnFr = typeof w.learningSuccessCount_en_fr === "number"
+    ? w.learningSuccessCount_en_fr
+    : (typeof w.success_count_en_fr === "number" ? w.success_count_en_fr : 0);
+
   return {
     id: String(w.id || ("word-" + Date.now() + "-" + Math.random().toString(36).substr(2, 5))),
     english_word: (w.english_word || "").trim(),
@@ -25,7 +32,15 @@ export function toDBWord(w) {
     french_translations: Array.isArray(w.french_translations) 
       ? w.french_translations.filter(Boolean)
       : [w.french_translation_1].filter(Boolean),
-    example_sentence: w.exampleSentence || w.example_sentence || w.notes || null,
+    example_sentence: (() => {
+      if (
+        w.exampleSentence === null || w.exampleSentence === "" ||
+        w.notes === null || w.notes === "" ||
+        w.example_sentence === null || w.example_sentence === ""
+      ) return null;
+      const raw = w.exampleSentence || w.example_sentence || w.notes;
+      return (typeof raw === "string" && raw.trim().length > 0) ? raw.trim() : null;
+    })(),
     success_count: learningSuccess,
     learned: Boolean(stage >= 1),
     srs_stage: stage,
@@ -35,6 +50,16 @@ export function toDBWord(w) {
     is_mastered: Boolean(stage >= 10),
     last_answered: w.lastAnsweredAt || w.lastAnswered || w.last_answered || null,
     last_correct: typeof w.lastCorrect === "boolean" ? w.lastCorrect : (typeof w.last_correct === "boolean" ? w.last_correct : null),
+    // Direction EN -> FR
+    srs_stage_en_fr: stageEnFr,
+    success_count_en_fr: learningSuccessEnFr,
+    learned_en_fr: Boolean(stageEnFr >= 1),
+    is_mastered_en_fr: Boolean(stageEnFr >= 10),
+    first_learned_at_en_fr: w.firstLearnedAt_en_fr || w.first_learned_at_en_fr || (stageEnFr >= 1 ? new Date().toISOString() : null),
+    next_review_at_en_fr: stageEnFr >= 10 || stageEnFr === 0 ? null : (w.nextReviewAt_en_fr || w.next_review_at_en_fr || null),
+    last_reviewed_at_en_fr: w.lastSrsReviewAt_en_fr || w.last_reviewed_at_en_fr || null,
+    last_answered_en_fr: w.lastAnsweredAt_en_fr || w.last_answered_en_fr || null,
+    last_correct_en_fr: typeof w.lastCorrect_en_fr === "boolean" ? w.lastCorrect_en_fr : (typeof w.last_correct_en_fr === "boolean" ? w.last_correct_en_fr : null),
     created_at: w.createdAt || w.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
@@ -43,7 +68,11 @@ export function toDBWord(w) {
 export function fromDBWord(row) {
   const stage = typeof row.srs_stage === "number" ? row.srs_stage : (row.learned ? 1 : 0);
   const rawCount = row.success_count ?? 0;
-  const contextNote = row.example_sentence || row.exampleSentence || row.notes || undefined;
+  const rawContext = row.example_sentence || row.exampleSentence || row.notes;
+  const contextNote = (typeof rawContext === "string" && rawContext.trim().length > 0) ? rawContext.trim() : undefined;
+
+  const stageEnFr = typeof row.srs_stage_en_fr === "number" ? row.srs_stage_en_fr : (row.learned_en_fr ? 1 : 0);
+  const rawCountEnFr = row.success_count_en_fr ?? 0;
 
   return {
     id: String(row.id),
@@ -52,6 +81,8 @@ export function fromDBWord(row) {
     french_translations: Array.isArray(row.french_translations) ? row.french_translations : [],
     exampleSentence: contextNote,
     notes: contextNote,
+    example_sentence: contextNote,
+    // Direction FR -> EN
     learningSuccessCount: stage === 0 ? rawCount : 0,
     totalCorrectAnswers: rawCount,
     successCount: stage === 0 ? rawCount : 0,
@@ -65,6 +96,19 @@ export function fromDBWord(row) {
     lastAnsweredAt: row.last_answered || undefined,
     lastAnswered: row.last_answered || undefined,
     lastCorrect: row.last_correct !== null ? row.last_correct : undefined,
+    // Direction EN -> FR
+    srsStage_en_fr: stageEnFr,
+    srs_stage_en_fr: stageEnFr,
+    learningSuccessCount_en_fr: stageEnFr === 0 ? rawCountEnFr : 0,
+    success_count_en_fr: stageEnFr === 0 ? rawCountEnFr : 0,
+    totalCorrectAnswers_en_fr: rawCountEnFr,
+    learned_en_fr: Boolean(stageEnFr >= 1),
+    isMastered_en_fr: Boolean(stageEnFr >= 10),
+    firstLearnedAt_en_fr: row.first_learned_at_en_fr || undefined,
+    nextReviewAt_en_fr: stageEnFr >= 10 || stageEnFr === 0 ? null : (row.next_review_at_en_fr || undefined),
+    lastSrsReviewAt_en_fr: row.last_reviewed_at_en_fr || undefined,
+    lastAnsweredAt_en_fr: row.last_answered_en_fr || undefined,
+    lastCorrect_en_fr: row.last_correct_en_fr !== null ? row.last_correct_en_fr : undefined,
     createdAt: row.created_at || new Date().toISOString()
   };
 }
@@ -414,9 +458,12 @@ class SyncService {
       if (updates.english_word !== undefined) dbUpdates.english_word = updates.english_word.trim();
       if (updates.part_of_speech !== undefined) dbUpdates.part_of_speech = updates.part_of_speech.trim().toLowerCase();
       if (updates.french_translations !== undefined) dbUpdates.french_translations = updates.french_translations;
-      if (updates.exampleSentence !== undefined) dbUpdates.example_sentence = updates.exampleSentence;
-      if (updates.example_sentence !== undefined) dbUpdates.example_sentence = updates.example_sentence;
-      if (updates.notes !== undefined) dbUpdates.example_sentence = updates.notes;
+      if (updates.exampleSentence !== undefined || updates.notes !== undefined || updates.example_sentence !== undefined) {
+        const val = updates.example_sentence !== undefined 
+          ? updates.example_sentence 
+          : (updates.exampleSentence !== undefined ? updates.exampleSentence : updates.notes);
+        dbUpdates.example_sentence = (typeof val === "string" && val.trim().length > 0) ? val.trim() : null;
+      }
       if (updates.successCount !== undefined) dbUpdates.success_count = updates.successCount;
       if (updates.success_count !== undefined) dbUpdates.success_count = updates.success_count;
       if (updates.learned !== undefined) dbUpdates.learned = updates.learned;
@@ -435,19 +482,55 @@ class SyncService {
       if (updates.lastCorrect !== undefined) dbUpdates.last_correct = updates.lastCorrect;
       if (updates.last_correct !== undefined) dbUpdates.last_correct = updates.last_correct;
 
-      // 1. Tenter la mise à jour par ID
+      // Champs direction en_fr (Anglais -> Français)
+      if (updates.srsStage_en_fr !== undefined) dbUpdates.srs_stage_en_fr = updates.srsStage_en_fr;
+      if (updates.srs_stage_en_fr !== undefined) dbUpdates.srs_stage_en_fr = updates.srs_stage_en_fr;
+      if (updates.learningSuccessCount_en_fr !== undefined) dbUpdates.success_count_en_fr = updates.learningSuccessCount_en_fr;
+      if (updates.success_count_en_fr !== undefined) dbUpdates.success_count_en_fr = updates.success_count_en_fr;
+      if (updates.learned_en_fr !== undefined) dbUpdates.learned_en_fr = updates.learned_en_fr;
+      if (updates.isMastered_en_fr !== undefined) dbUpdates.is_mastered_en_fr = updates.isMastered_en_fr;
+      if (updates.is_mastered_en_fr !== undefined) dbUpdates.is_mastered_en_fr = updates.is_mastered_en_fr;
+      if (updates.nextReviewAt_en_fr !== undefined) dbUpdates.next_review_at_en_fr = updates.nextReviewAt_en_fr;
+      if (updates.next_review_at_en_fr !== undefined) dbUpdates.next_review_at_en_fr = updates.next_review_at_en_fr;
+      if (updates.lastSrsReviewAt_en_fr !== undefined) dbUpdates.last_reviewed_at_en_fr = updates.lastSrsReviewAt_en_fr;
+      if (updates.last_reviewed_at_en_fr !== undefined) dbUpdates.last_reviewed_at_en_fr = updates.last_reviewed_at_en_fr;
+      if (updates.lastAnsweredAt_en_fr !== undefined) dbUpdates.last_answered_en_fr = updates.lastAnsweredAt_en_fr;
+      if (updates.last_answered_en_fr !== undefined) dbUpdates.last_answered_en_fr = updates.last_answered_en_fr;
+      if (updates.lastCorrect_en_fr !== undefined) dbUpdates.last_correct_en_fr = updates.lastCorrect_en_fr;
+      if (updates.last_correct_en_fr !== undefined) dbUpdates.last_correct_en_fr = updates.last_correct_en_fr;
+      if (updates.firstLearnedAt_en_fr !== undefined) dbUpdates.first_learned_at_en_fr = updates.firstLearnedAt_en_fr;
+      if (updates.first_learned_at_en_fr !== undefined) dbUpdates.first_learned_at_en_fr = updates.first_learned_at_en_fr;
+
+      // 1. Tenter la mise à jour par ID unique (garantissant l'isolation stricte des homonymes)
       let { data, error } = await this.client
         .from("words")
         .update(dbUpdates)
         .eq("id", String(id))
         .select();
 
-      // 2. Si aucun enregistrement n'a été trouvé par ID et qu'on a le mot anglais, tenter par english_word
-      if (!error && (!data || data.length === 0) && updates.english_word) {
+      // Si erreur de colonne manquante (migration SQL non encore appliquée sur Supabase), repli gracieux sans bloquer
+      if (error && (error.code === "PGRST204" || error.code === "42703" || (error.message && error.message.includes("column")))) {
+        console.warn("Colonnes en_fr non encore créées sur Supabase (exécutez supabase_migration_bidirectional.sql). Repli sur champs standards.");
+        const fallbackUpdates = { ...dbUpdates };
+        Object.keys(fallbackUpdates).forEach((k) => {
+          if (k.endsWith("_en_fr")) delete fallbackUpdates[k];
+        });
+        const fallbackRes = await this.client
+          .from("words")
+          .update(fallbackUpdates)
+          .eq("id", String(id))
+          .select();
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
+
+      // 2. Si aucun enregistrement n'a été trouvé par ID et qu'on a le mot anglais ET la partie du discours
+      if (!error && (!data || data.length === 0) && updates.english_word && updates.part_of_speech) {
         const res = await this.client
           .from("words")
           .update(dbUpdates)
           .ilike("english_word", updates.english_word.trim())
+          .eq("part_of_speech", updates.part_of_speech.trim().toLowerCase())
           .select();
         data = res.data;
         error = res.error;

@@ -158,7 +158,7 @@ export function SettingsView({ words, onWordsUpdate }) {
   };
 
   const missingContextWords = useMemo(() => {
-    return words.filter((w) => !w.exampleSentence && !w.notes);
+    return words.filter((w) => !w.exampleSentence && !w.notes && !w.contextNoteCleared);
   }, [words]);
 
   const handleBatchEnrichContext = async () => {

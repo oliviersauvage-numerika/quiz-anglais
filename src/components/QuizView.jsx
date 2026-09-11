@@ -15,39 +15,115 @@ import {
   BookOpen,
   Zap,
   Info,
-  AlertCircle
+  AlertCircle,
+  HelpCircle,
+  Loader2,
+  Eye,
+  Shuffle
 } from "lucide-react";
-import { PART_OF_SPEECH_LABELS } from "../services/translationService";
+import { PART_OF_SPEECH_LABELS, translationService } from "../services/translationService";
 import { storageService } from "../services/storageService";
 import { srsService } from "../services/srsService";
 
 export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
-  // 3 Modes explicites : "srs-review" | "initial-learning" | "free-practice"
-  const dueReviews = useMemo(() => words.filter((w) => srsService.isReviewDue(w)), [words]);
-  const learningWords = useMemo(() => words.filter((w) => (w.srsStage || 0) === 0 && !w.isMastered), [words]);
-  const masteredWords = useMemo(() => words.filter((w) => w.isMastered || (w.srsStage || 0) >= 10), [words]);
+  // Préférence de direction : "fr_en" | "en_fr" | "mixed"
+  const [directionPreference, setDirectionPreference] = useState(() => storageService.getQuizDirectionPreference());
 
-  // Choix du mode initial par défaut
+  // 3 Modes explicites : "srs-review" | "initial-learning" | "free-practice"
   const [quizMode, setQuizMode] = useState(() => {
-    if (words.some((w) => srsService.isReviewDue(w))) return "srs-review";
-    if (words.some((w) => (w.srsStage || 0) === 0 && !w.isMastered)) return "initial-learning";
+    const pref = storageService.getQuizDirectionPreference();
+    if (words.some((w) => srsService.isReviewDue(w, new Date(), pref === "mixed" ? "fr_en" : pref) || (pref === "mixed" && srsService.isReviewDue(w, new Date(), "en_fr")))) {
+      return "srs-review";
+    }
+    if (words.some((w) => srsService.isLearning(w, pref === "mixed" ? "fr_en" : pref) || (pref === "mixed" && srsService.isLearning(w, "en_fr")))) {
+      return "initial-learning";
+    }
     return "free-practice";
   });
 
+  // Calculs des révisions dues par direction
+  const dueReviewsFrEn = useMemo(() => words.filter((w) => srsService.isReviewDue(w, new Date(), "fr_en")), [words]);
+  const dueReviewsEnFr = useMemo(() => words.filter((w) => srsService.isReviewDue(w, new Date(), "en_fr")), [words]);
+
+  // Calculs des apprentissages par direction
+  const learningWordsFrEn = useMemo(() => words.filter((w) => srsService.isLearning(w, "fr_en")), [words]);
+  const learningWordsEnFr = useMemo(() => words.filter((w) => srsService.isLearning(w, "en_fr")), [words]);
+
+  // Éléments candidats selon le mode et la direction
+  const candidateItems = useMemo(() => {
+    if (quizMode === "srs-review") {
+      if (directionPreference === "fr_en") {
+        return dueReviewsFrEn.map((w) => ({ wordId: String(w.id), direction: "fr_en", word: w }));
+      }
+      if (directionPreference === "en_fr") {
+        return dueReviewsEnFr.map((w) => ({ wordId: String(w.id), direction: "en_fr", word: w }));
+      }
+      return [
+        ...dueReviewsFrEn.map((w) => ({ wordId: String(w.id), direction: "fr_en", word: w })),
+        ...dueReviewsEnFr.map((w) => ({ wordId: String(w.id), direction: "en_fr", word: w }))
+      ];
+    }
+
+    if (quizMode === "initial-learning") {
+      if (directionPreference === "fr_en") {
+        return learningWordsFrEn.map((w) => ({ wordId: String(w.id), direction: "fr_en", word: w }));
+      }
+      if (directionPreference === "en_fr") {
+        return learningWordsEnFr.map((w) => ({ wordId: String(w.id), direction: "en_fr", word: w }));
+      }
+      return [
+        ...learningWordsFrEn.map((w) => ({ wordId: String(w.id), direction: "fr_en", word: w })),
+        ...learningWordsEnFr.map((w) => ({ wordId: String(w.id), direction: "en_fr", word: w }))
+      ];
+    }
+
+    // free-practice
+    if (directionPreference === "fr_en") {
+      return words.map((w) => ({ wordId: String(w.id), direction: "fr_en", word: w }));
+    }
+    if (directionPreference === "en_fr") {
+      return words.map((w) => ({ wordId: String(w.id), direction: "en_fr", word: w }));
+    }
+    return [
+      ...words.map((w) => ({ wordId: String(w.id), direction: "fr_en", word: w })),
+      ...words.map((w) => ({ wordId: String(w.id), direction: "en_fr", word: w }))
+    ];
+  }, [quizMode, directionPreference, dueReviewsFrEn, dueReviewsEnFr, learningWordsFrEn, learningWordsEnFr, words]);
+
+  // Total des révisions dues et apprentissages visibles selon le sélecteur
+  const visibleDueCount = useMemo(() => {
+    if (directionPreference === "fr_en") return dueReviewsFrEn.length;
+    if (directionPreference === "en_fr") return dueReviewsEnFr.length;
+    return dueReviewsFrEn.length + dueReviewsEnFr.length;
+  }, [directionPreference, dueReviewsFrEn.length, dueReviewsEnFr.length]);
+
+  const visibleLearningCount = useMemo(() => {
+    if (directionPreference === "fr_en") return learningWordsFrEn.length;
+    if (directionPreference === "en_fr") return learningWordsEnFr.length;
+    return learningWordsFrEn.length + learningWordsEnFr.length;
+  }, [directionPreference, learningWordsFrEn.length, learningWordsEnFr.length]);
+
+  // États de la question courante
   const [currentWord, setCurrentWord] = useState(null);
+  const [currentDirection, setCurrentDirection] = useState("fr_en"); // "fr_en" | "en_fr"
   const [displayedPrompt, setDisplayedPrompt] = useState("");
   const [userAnswer, setUserAnswer] = useState("");
-  const [quizState, setQuizState] = useState("answering"); // "answering" | "correct" | "incorrect"
+  const [showHint, setShowHint] = useState(false); // Masquage de l'indice en EN -> FR
+
+  // États du cycle de vie du quiz : "answering" | "evaluating" | "correct" | "incorrect" | "uncertain"
+  const [quizState, setQuizState] = useState("answering");
   const [lastUpdatedWord, setLastUpdatedWord] = useState(null);
   const [emptyAnswerWarning, setEmptyAnswerWarning] = useState(null);
+  const [uncertainDetails, setUncertainDetails] = useState(null);
 
-  // Instantané du résultat pour découplage strict avec les révisions encore dues et Supabase Realtime
+  // Instantané du résultat pour découplage strict
   const [resultSnapshot, setResultSnapshot] = useState(null);
   
   const [roundQueue, setRoundQueue] = useState([]);
-  const recentWordIdsRef = useRef([]); // Historique des 2 derniers IDs posés pour anti-répétition
+  const recentWordIdsRef = useRef([]); // Historique récent des IDs posés pour anti-répétition
+  const submissionIdRef = useRef(0); // Jetons d'invalidation pour requêtes asynchrones
   const inputRef = useRef(null);
-  const isSubmittingRef = useRef(false); // Verrou anti-double validation
+  const isSubmittingRef = useRef(false);
 
   // Reconnaissance vocale (Speech-to-Text)
   const [isListening, setIsListening] = useState(false);
@@ -55,18 +131,6 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   const recognitionRef = useRef(null);
 
   const [sessionScore, setSessionScore] = useState({ correct: 0, total: 0 });
-
-  // Candidats selon le mode actif
-  const candidateWords = useMemo(() => {
-    if (quizMode === "srs-review") {
-      return dueReviews;
-    }
-    if (quizMode === "initial-learning") {
-      return learningWords;
-    }
-    // "free-practice" : toutes les cartes
-    return words;
-  }, [quizMode, dueReviews, learningWords, words]);
 
   const isSpeechSupported = typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
@@ -83,7 +147,10 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
   // Sélection de la question suivante
   const pickNextQuestion = () => {
     stopListening();
-    if (candidateWords.length === 0) {
+    setShowHint(false);
+    setUncertainDetails(null);
+
+    if (candidateItems.length === 0) {
       setCurrentWord(null);
       setQuizState("answering");
       setLastUpdatedWord(null);
@@ -93,11 +160,21 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
 
     let queue = [...roundQueue];
-    // Ne conserver que les IDs qui font toujours partie des candidats éligibles
-    queue = queue.filter((id) => candidateWords.some((w) => String(w.id) === String(id)));
+    // Conserver uniquement les items toujours éligibles
+    queue = queue.filter((item) => candidateItems.some((c) => String(c.wordId) === String(item.wordId) && c.direction === item.direction));
 
     if (queue.length === 0) {
-      queue = srsService.buildRoundQueue(candidateWords, recentWordIdsRef.current);
+      if (directionPreference === "mixed") {
+        queue = srsService.buildMixedRoundQueue(candidateItems, recentWordIdsRef.current);
+      } else {
+        const wordList = candidateItems.map((c) => c.word);
+        const rawIds = srsService.buildRoundQueue(wordList, recentWordIdsRef.current, directionPreference);
+        queue = rawIds.map((id) => ({
+          wordId: String(id),
+          direction: directionPreference,
+          word: candidateItems.find((c) => String(c.wordId) === String(id))?.word
+        }));
+      }
     }
 
     if (queue.length === 0) {
@@ -109,24 +186,31 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       return;
     }
 
-    let nextId = queue.shift();
+    let nextItem = queue.shift();
 
-    // Anti-répétition consécutive : si N >= 2 et que la carte correspond à la dernière posée
-    if (candidateWords.length > 1 && recentWordIdsRef.current.length > 0 && String(nextId) === String(recentWordIdsRef.current[0]) && queue.length > 0) {
-      const altId = queue.shift();
-      queue.unshift(nextId);
-      nextId = altId;
+    // Anti-répétition consécutive stricte sur le même mot (même dans un sens différent)
+    if (candidateItems.length > 1 && recentWordIdsRef.current.length > 0 && String(nextItem.wordId) === String(recentWordIdsRef.current[0]) && queue.length > 0) {
+      const altItem = queue.shift();
+      queue.unshift(nextItem);
+      nextItem = altItem;
     }
 
-    const nextWord = candidateWords.find((w) => String(w.id) === String(nextId)) || candidateWords[0];
-    
+    const nextWord = candidateItems.find((c) => String(c.wordId) === String(nextItem.wordId))?.word || candidateItems[0].word;
+    const nextDir = nextItem.direction || directionPreference;
+
     // Mise à jour de l'historique récent (max 2 cartes)
     recentWordIdsRef.current = [nextWord.id, ...recentWordIdsRef.current.filter((id) => id !== nextWord.id)].slice(0, 2);
 
-    // Détermination de la consigne (frenchPrompt ou première traduction)
-    const prompt = nextWord.frenchPrompt || (nextWord.french_translations && nextWord.french_translations[0]) || "";
+    // Détermination de la consigne
+    let prompt = "";
+    if (nextDir === "en_fr") {
+      prompt = nextWord.english_word || "";
+    } else {
+      prompt = nextWord.frenchPrompt || (nextWord.french_translations && nextWord.french_translations[0]) || "";
+    }
 
     setCurrentWord(nextWord);
+    setCurrentDirection(nextDir);
     setDisplayedPrompt(prompt);
     setRoundQueue(queue);
     setUserAnswer("");
@@ -137,10 +221,31 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     isSubmittingRef.current = false;
   };
 
+  // Changement explicite de direction
+  const handleDirectionChange = (newDir) => {
+    if (newDir === directionPreference) return;
+    stopListening();
+    submissionIdRef.current++;
+    storageService.setQuizDirectionPreference(newDir);
+    setDirectionPreference(newDir);
+    setCurrentWord(null);
+    setDisplayedPrompt("");
+    setUserAnswer("");
+    setEmptyAnswerWarning(null);
+    setQuizState("answering");
+    setLastUpdatedWord(null);
+    setResultSnapshot(null);
+    setRoundQueue([]);
+    setShowHint(false);
+    setUncertainDetails(null);
+    isSubmittingRef.current = false;
+  };
+
   // Changement explicite de mode de quiz
   const handleModeChange = (newMode) => {
     if (newMode === quizMode) return;
     stopListening();
+    submissionIdRef.current++;
     setQuizMode(newMode);
     setCurrentWord(null);
     setDisplayedPrompt("");
@@ -150,24 +255,25 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     setLastUpdatedWord(null);
     setResultSnapshot(null);
     setRoundQueue([]);
+    setShowHint(false);
+    setUncertainDetails(null);
     isSubmittingRef.current = false;
   };
 
   // Synchronisation des questions : déclenchée uniquement en état "answering"
-  // Ne JAMAIS interrompre la lecture d'un résultat en cours d'affichage
   useEffect(() => {
     if (quizState !== "answering") {
       return;
     }
 
-    if (candidateWords.length > 0) {
-      if (!currentWord || !candidateWords.some((w) => String(w.id) === String(currentWord.id))) {
+    if (candidateItems.length > 0) {
+      if (!currentWord || !candidateItems.some((c) => String(c.wordId) === String(currentWord.id) && c.direction === currentDirection)) {
         pickNextQuestion();
       }
     } else {
       setCurrentWord(null);
     }
-  }, [quizMode, candidateWords.length, quizState]);
+  }, [quizMode, directionPreference, candidateItems.length, quizState]);
 
   // Focus automatique de l'input lors du passage à une nouvelle question
   useEffect(() => {
@@ -216,7 +322,9 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
-      recognition.lang = "en-US";
+      
+      // Langue adaptée selon le sens attendu
+      recognition.lang = currentDirection === "en_fr" ? "fr-FR" : "en-US";
       recognition.continuous = false;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
@@ -265,70 +373,54 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
   };
 
-  const playPronunciation = (text) => {
+  const playPronunciation = (text, lang = "en-US") => {
     if ("speechSynthesis" in window && text) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "en-US";
+      utterance.lang = lang;
       utterance.rate = 0.85;
       window.speechSynthesis.speak(utterance);
     }
   };
 
-  // Soumission et validation de la réponse
-  const handleSubmit = (e) => {
-    if (e) e.preventDefault();
-    stopListening();
-
-    // 1. Protection anti-double validation
-    if (isSubmittingRef.current || quizState !== "answering") {
-      return;
-    }
-
-    // 2. Gestion réponse vide sans la comptabiliser comme une erreur
+  // Finalisation et enregistrement du résultat dans le SRS
+  const finalizeSubmission = (isCorrect, details = {}) => {
     const trimmedAnswer = userAnswer.trim();
-    if (!trimmedAnswer) {
-      setEmptyAnswerWarning("Saisis une réponse avant de valider");
-      inputRef.current?.focus();
-      return;
-    }
+    const targetDirection = currentDirection;
 
-    setEmptyAnswerWarning(null);
-    if (!currentWord) return;
-
-    isSubmittingRef.current = true;
-
-    // 3. Évaluation via srsService.checkAnswer (moteur centralisé avec tolérances linguistiques)
-    const isCorrect = srsService.checkAnswer(trimmedAnswer, currentWord);
-
-    // 4. Détection si c'est la dernière question de la session
+    // Détection si c'est la dernière question de la session
     let isLast = false;
     if (quizMode === "srs-review") {
-      const remainingDue = dueReviews.filter((w) => String(w.id) !== String(currentWord.id));
+      const remainingDue = candidateItems.filter((c) => !(String(c.wordId) === String(currentWord.id) && c.direction === targetDirection));
       isLast = remainingDue.length === 0;
     } else if (quizMode === "initial-learning") {
-      const remainingLearning = learningWords.filter((w) => String(w.id) !== String(currentWord.id));
-      const willGraduate = isCorrect && ((currentWord.learningSuccessCount || 0) + 1 >= 3);
+      const remainingLearning = candidateItems.filter((c) => !(String(c.wordId) === String(currentWord.id) && c.direction === targetDirection));
+      const currentProg = srsService.getProgress(currentWord, targetDirection);
+      const willGraduate = isCorrect && (currentProg.learningSuccessCount + 1 >= 3);
       isLast = remainingLearning.length === 0 && willGraduate;
     } else {
       // free-practice
-      const queueRemaining = roundQueue.filter((id) => String(id) !== String(currentWord.id));
-      isLast = words.length <= 1 || queueRemaining.length === 0;
+      const queueRemaining = roundQueue.filter((item) => !(String(item.wordId) === String(currentWord.id) && item.direction === targetDirection));
+      isLast = candidateItems.length <= 1 || queueRemaining.length === 0;
     }
 
-    // 5. Enregistrement Local-First
+    // Enregistrement Local-First avec direction ciblée
     const { words: updatedWords, updatedWord } = storageService.recordQuizResult(
       currentWord.id, 
       isCorrect, 
-      quizMode
+      quizMode,
+      targetDirection
     );
 
-    // 6. Sauvegarde de l'instantané indépendant
+    // Sauvegarde de l'instantané indépendant
     setResultSnapshot({
       word: currentWord,
+      direction: targetDirection,
       displayedPrompt,
       userAnswer: trimmedAnswer,
       isCorrect,
+      explanation: details.explanation || (isCorrect ? "Bonne réponse !" : "Réponse incorrecte"),
+      reference: details.reference || (targetDirection === "en_fr" ? (currentWord.french_translations?.[0] || "") : currentWord.english_word),
       updatedWord,
       isLastQuestion: isLast,
       quizMode
@@ -344,9 +436,14 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
     if (isCorrect) {
       setQuizState("correct");
-      playPronunciation(currentWord.english_word);
+      if (targetDirection === "fr_en") {
+        playPronunciation(currentWord.english_word, "en-US");
+      }
 
-      if (quizMode !== "free-practice" && (updatedWord?.isMastered || (updatedWord?.srsStage === 1 && !currentWord.learned))) {
+      const updatedProg = srsService.getProgress(updatedWord, targetDirection);
+      const prevProg = srsService.getProgress(currentWord, targetDirection);
+
+      if (quizMode !== "free-practice" && (updatedProg.isMastered || (updatedProg.stage === 1 && !prevProg.learned))) {
         try {
           confetti({
             particleCount: 80,
@@ -360,6 +457,114 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
   };
 
+  // Soumission et validation de la réponse
+  const handleSubmit = async (e) => {
+    if (e) e.preventDefault();
+    stopListening();
+
+    // Protection anti-double validation
+    if (isSubmittingRef.current || quizState !== "answering") {
+      return;
+    }
+
+    const trimmedAnswer = userAnswer.trim();
+    if (!trimmedAnswer) {
+      setEmptyAnswerWarning("Saisis une réponse avant de valider");
+      inputRef.current?.focus();
+      return;
+    }
+
+    setEmptyAnswerWarning(null);
+    if (!currentWord) return;
+
+    isSubmittingRef.current = true;
+    const currentSubId = ++submissionIdRef.current;
+
+    if (currentDirection === "fr_en") {
+      // Sens FR -> EN : évaluation synchrone avec tolérances
+      const isCorrect = srsService.checkAnswer(trimmedAnswer, currentWord, "fr_en");
+      finalizeSubmission(isCorrect, {
+        explanation: isCorrect ? "Bonne réponse !" : "Réponse incorrecte",
+        reference: currentWord.english_word
+      });
+    } else {
+      // Sens EN -> FR : Évaluation en deux étapes
+      // 1. Contrôle local strict (traductions enregistrées, accents, coquilles légères)
+      const isLocalMatch = srsService.checkFrenchAnswerLocal(trimmedAnswer, currentWord);
+      if (isLocalMatch) {
+        finalizeSubmission(true, {
+          explanation: "Traduction exacte reconnue localement.",
+          reference: currentWord.french_translations?.[0] || ""
+        });
+        return;
+      }
+
+      // 2. Évaluation sémantique via Gemini (synonymes, reformulations fidèles)
+      setQuizState("evaluating");
+      try {
+        const semanticRes = await translationService.evaluateFrenchAnswerSemantic({
+          englishWord: currentWord.english_word,
+          partOfSpeech: currentWord.part_of_speech,
+          contextNote: currentWord.exampleSentence,
+          referenceTranslations: currentWord.french_translations,
+          userAnswer: trimmedAnswer
+        });
+
+        // Rejeter la réponse si la question a changé entre-temps
+        if (submissionIdRef.current !== currentSubId) {
+          return;
+        }
+
+        if (semanticRes.evaluation === "correct") {
+          finalizeSubmission(true, {
+            explanation: semanticRes.explanation || "Traduction acceptée par analyse du sens.",
+            reference: semanticRes.reference || currentWord.french_translations?.[0]
+          });
+        } else if (semanticRes.evaluation === "incorrect") {
+          finalizeSubmission(false, {
+            explanation: semanticRes.explanation || "Contresens ou formulation incorrecte.",
+            reference: semanticRes.reference || currentWord.french_translations?.[0]
+          });
+        } else {
+          // Évaluation incertaine, hors-ligne ou panne : aucun échec comptabilisé
+          setQuizState("uncertain");
+          setUncertainDetails({
+            explanation: semanticRes.explanation || "Vérification indisponible ou ambiguë.",
+            reference: semanticRes.reference || currentWord.french_translations?.[0]
+          });
+          isSubmittingRef.current = false;
+        }
+      } catch (err) {
+        if (submissionIdRef.current !== currentSubId) return;
+        setQuizState("uncertain");
+        setUncertainDetails({
+          explanation: "Impossible de joindre le service de vérification.",
+          reference: currentWord.french_translations?.[0]
+        });
+        isSubmittingRef.current = false;
+      }
+    }
+  };
+
+  // Passer sans pénalité SRS en cas d'incertitude ou hors-ligne
+  const handleSkipWithoutPenalty = () => {
+    isSubmittingRef.current = false;
+    setQuizState("answering");
+    setUncertainDetails(null);
+    setUserAnswer("");
+    pickNextQuestion();
+  };
+
+  // Réessayer la réponse courante
+  const handleRetryCurrent = () => {
+    isSubmittingRef.current = false;
+    setQuizState("answering");
+    setUncertainDetails(null);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+  };
+
   // Passage à la question suivante ou écran de fin
   const handleNext = () => {
     isSubmittingRef.current = false;
@@ -367,9 +572,9 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
 
     setResultSnapshot(null);
     setEmptyAnswerWarning(null);
+    setUncertainDetails(null);
 
     if (wasLast) {
-      // Fin de la session
       setCurrentWord(null);
       setQuizState("answering");
       setLastUpdatedWord(null);
@@ -381,8 +586,9 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     pickNextQuestion();
   };
 
-  // Références stables pour l'affichage (priorité au snapshot pendant la lecture du résultat)
+  // Références stables pour l'affichage (priorité au snapshot pendant le feedback)
   const activeWord = resultSnapshot ? resultSnapshot.word : currentWord;
+  const activeDirection = resultSnapshot ? resultSnapshot.direction : currentDirection;
   const activePrompt = resultSnapshot ? resultSnapshot.displayedPrompt : displayedPrompt;
   const isLastQuestion = resultSnapshot ? resultSnapshot.isLastQuestion : false;
   const activeUpdatedWord = resultSnapshot?.updatedWord || lastUpdatedWord;
@@ -393,12 +599,14 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     color: "bg-slate-100 text-slate-800 border-slate-200"
   };
 
-  const currentStageInfo = srsService.getStageInfo(activeWord?.srsStage || (activeWord?.learned ? 1 : 0));
+  const activeProg = activeWord ? srsService.getProgress(activeWord, activeDirection) : { stage: 0, learningSuccessCount: 0, isMastered: false, learned: false };
+  const updatedProg = activeUpdatedWord ? srsService.getProgress(activeUpdatedWord, activeDirection) : activeProg;
+  const currentStageInfo = srsService.getStageInfo(activeProg.stage);
 
   return (
     <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-1 pb-24 space-y-3">
       
-      {/* Sélecteur de Mode de Quiz explicite */}
+      {/* Sélecteur de Mode de Quiz */}
       <div className="bg-slate-200/70 dark:bg-slate-900 p-1 rounded-2xl flex items-center gap-1 border border-slate-200 dark:border-slate-800">
         <button
           onClick={() => handleModeChange("srs-review")}
@@ -410,11 +618,11 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
         >
           <Bell className="w-3 h-3" />
           <span>Révisions</span>
-          {dueReviews.length > 0 && (
+          {visibleDueCount > 0 && (
             <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
               quizMode === "srs-review" ? "bg-white text-amber-600" : "bg-amber-500 text-white"
             }`}>
-              {dueReviews.length}
+              {visibleDueCount}
             </span>
           )}
         </button>
@@ -429,11 +637,11 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
         >
           <Zap className="w-3 h-3" />
           <span>Apprentissage</span>
-          {learningWords.length > 0 && (
+          {visibleLearningCount > 0 && (
             <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
               quizMode === "initial-learning" ? "bg-white text-indigo-600" : "bg-indigo-500 text-white"
             }`}>
-              {learningWords.length}
+              {visibleLearningCount}
             </span>
           )}
         </button>
@@ -451,8 +659,45 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
         </button>
       </div>
 
-      {/* État vide explicite lorsque le mode sélectionné n'a plus de cartes */}
-      {!activeWord || (candidateWords.length === 0 && quizState === "answering") ? (
+      {/* Sélecteur de Sens de Travail (Français -> Anglais, Anglais -> Français, Mixte) */}
+      <div className="bg-slate-100 dark:bg-slate-800/80 p-0.5 rounded-xl flex items-center gap-1 border border-slate-200/80 dark:border-slate-700/60 text-xs">
+        <button
+          onClick={() => handleDirectionChange("fr_en")}
+          className={`flex-1 py-1 px-2 rounded-lg font-bold transition text-center ${
+            directionPreference === "fr_en"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          🇫🇷 → 🇬🇧 <span className="hidden sm:inline">Français → Anglais</span>
+        </button>
+
+        <button
+          onClick={() => handleDirectionChange("en_fr")}
+          className={`flex-1 py-1 px-2 rounded-lg font-bold transition text-center ${
+            directionPreference === "en_fr"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          🇬🇧 → 🇫🇷 <span className="hidden sm:inline">Anglais → Français</span>
+        </button>
+
+        <button
+          onClick={() => handleDirectionChange("mixed")}
+          className={`flex-1 py-1 px-2 rounded-lg font-bold transition flex items-center justify-center gap-1 text-center ${
+            directionPreference === "mixed"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          <Shuffle className="w-3 h-3" />
+          <span>Mixte</span>
+        </button>
+      </div>
+
+      {/* État vide lorsque le mode/sens sélectionné n'a plus de cartes */}
+      {!activeWord || (candidateItems.length === 0 && quizState === "answering") ? (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center animate-fade-in bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-xl shadow-slate-200/50 dark:shadow-none min-h-[380px]">
           <div className="w-16 h-16 bg-gradient-to-tr from-emerald-400 to-teal-500 rounded-3xl shadow-lg shadow-emerald-500/20 flex items-center justify-center text-white mb-4 animate-pop-in">
             <Award className="w-8 h-8" />
@@ -462,15 +707,15 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
             {quizMode === "srs-review" 
               ? "Toutes les révisions du jour sont terminées ! 🎉"
               : quizMode === "initial-learning"
-              ? "Aucun mot en apprentissage initial !"
+              ? "Aucun mot en apprentissage dans ce sens !"
               : "Aucun mot dans votre vocabulaire"}
           </h2>
           
           <p className="text-slate-600 dark:text-slate-300 text-xs mb-6 max-w-xs leading-relaxed">
             {quizMode === "srs-review"
-              ? "Vous êtes parfaitement à jour sur votre calendrier SRS. Pour continuer à vous exercer sans modifier vos échéances, lancez l'entraînement libre !"
+              ? "Vous êtes à jour sur votre calendrier SRS pour ce sens de travail. Entraînez-vous librement ou changez de sens !"
               : quizMode === "initial-learning"
-              ? "Tous vos mots ont validé le palier initial (3 réussites consécutives). Vous pouvez ajouter de nouveaux mots ou vous entraîner librement."
+              ? "Tous vos mots ont validé le palier initial (3 réussites consécutives). Lancez l'autre sens ou entraînez-vous librement."
               : "Ajoutez vos premiers mots de vocabulaire pour démarrer."}
           </p>
 
@@ -500,15 +745,22 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
           <div>
             {/* Header de la carte */}
             <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-              <span className={`text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${posInfo.color}`}>
-                {posInfo.fr}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${posInfo.color}`}>
+                  {posInfo.fr}
+                </span>
 
-              {/* Mode actuel & Badge SRS */}
+                {/* Badge de sens de la question active */}
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                  {activeDirection === "en_fr" ? "🇬🇧 → 🇫🇷" : "🇫🇷 → 🇬🇧"}
+                </span>
+              </div>
+
+              {/* Mode actuel & Badge SRS pour cette direction */}
               <div className="flex items-center gap-1.5">
                 {quizMode === "free-practice" ? (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                    Mode Libre (neutre SRS)
+                    Mode Libre
                   </span>
                 ) : quizMode === "srs-review" ? (
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white flex items-center gap-1 shadow-xs">
@@ -518,32 +770,58 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 ) : (
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 flex items-center gap-1">
                     <Zap className="w-3 h-3 text-indigo-600" />
-                    <span>{activeWord?.learningSuccessCount || 0}/3 ★ consécutifs</span>
+                    <span>{activeProg.learningSuccessCount || 0}/3 ★</span>
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Mot en français demandé (sens précis) avec rappel grammatical contextuel */}
+            {/* Mot demandé */}
             <div className="my-4 text-center">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-full text-xs font-semibold mb-2">
-                Traduisez {posInfo.promptFr || "ce mot"} en anglais :
+                {activeDirection === "en_fr" ? "Traduisez en français :" : `Traduisez ${posInfo.promptFr || "ce mot"} en anglais :`}
               </span>
-              <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-                « {activePrompt} »
-              </h1>
+
+              <div className="flex items-center justify-center gap-2">
+                <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+                  « {activePrompt} »
+                </h1>
+                {activeDirection === "en_fr" && (
+                  <button
+                    type="button"
+                    onClick={() => playPronunciation(activeWord.english_word, "en-US")}
+                    className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-full transition"
+                    title="Écouter la prononciation anglaise"
+                  >
+                    <Volume2 className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
               
-              {activeWord?.french_translations && activeWord.french_translations.length > 1 && (
+              {activeDirection === "fr_en" && activeWord?.french_translations && activeWord.french_translations.length > 1 && (
                 <p className="text-[11px] text-slate-400 mt-1">
                   (Autres variantes : {activeWord.french_translations.filter((t) => t !== activePrompt).join(", ")})
                 </p>
               )}
 
-              {/* Note de contexte / Précision de sens en jaune/ambre italique */}
+              {/* Note de contexte : en Anglais -> Français, masquée par défaut pour ne pas révéler la réponse */}
               {(activeWord?.exampleSentence || activeWord?.example_sentence || activeWord?.notes) && (
-                <div className="mt-3 px-3.5 py-2 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300 italic flex items-center justify-center gap-2 shadow-xs text-center">
-                  <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span>{activeWord.exampleSentence || activeWord.example_sentence || activeWord.notes}</span>
+                <div className="mt-3">
+                  {activeDirection === "en_fr" && quizState === "answering" && !showHint ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowHint(true)}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 hover:text-amber-800 bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 px-2.5 py-1 rounded-xl transition"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>Afficher un indice de contexte (peut contenir la réponse)</span>
+                    </button>
+                  ) : (
+                    <div className="px-3.5 py-2 bg-amber-500/10 dark:bg-amber-950/40 border border-amber-300/60 dark:border-amber-800/60 rounded-xl text-xs text-amber-800 dark:text-amber-300 italic flex items-center justify-center gap-2 shadow-xs text-center animate-fade-in">
+                      <Info className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>{activeWord.exampleSentence || activeWord.example_sentence || activeWord.notes}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -552,11 +830,12 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
           {/* Section de réponse / Résultat */}
           <div className="space-y-3">
             
-            {quizState === "answering" && (
+            {/* État : Saisie de réponse */}
+            {(quizState === "answering" || quizState === "evaluating") && (
               <form onSubmit={handleSubmit} className="space-y-2.5">
                 
                 {/* Bouton de réponse vocale */}
-                {isSpeechSupported && (
+                {isSpeechSupported && quizState === "answering" && (
                   <div className="flex flex-col gap-1">
                     <button
                       type="button"
@@ -570,12 +849,12 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                       {isListening ? (
                         <>
                           <MicOff className="w-3.5 h-3.5 animate-bounce shrink-0" />
-                          <span>Écoute en cours... Parlez (cliquez pour arrêter)</span>
+                          <span>Écoute en cours ({activeDirection === "en_fr" ? "français" : "anglais"})...</span>
                         </>
                       ) : (
                         <>
                           <Mic className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                          <span>🎤 Répondre à l'oral</span>
+                          <span>🎤 Répondre à l'oral ({activeDirection === "en_fr" ? "en français" : "en anglais"})</span>
                         </>
                       )}
                     </button>
@@ -591,12 +870,17 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                   <input
                     ref={inputRef}
                     type="text"
+                    disabled={quizState === "evaluating"}
                     value={userAnswer}
                     onChange={(e) => {
                       setUserAnswer(e.target.value);
                       if (emptyAnswerWarning) setEmptyAnswerWarning(null);
                     }}
-                    placeholder={posInfo.placeholder || "Tapez votre réponse en anglais..."}
+                    placeholder={
+                      activeDirection === "en_fr" 
+                        ? "Tapez votre traduction en français..." 
+                        : (posInfo.placeholder || "Tapez votre réponse en anglais...")
+                    }
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck="false"
@@ -604,7 +888,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                       emptyAnswerWarning 
                         ? "border-amber-400 dark:border-amber-500 ring-2 ring-amber-300/40" 
                         : "border-slate-200 dark:border-slate-700"
-                    } rounded-2xl text-base font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-600 focus:bg-white dark:focus:bg-slate-800 transition`}
+                    } rounded-2xl text-base font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-600 focus:bg-white dark:focus:bg-slate-800 transition disabled:opacity-60`}
                   />
                 </div>
 
@@ -616,17 +900,66 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                 )}
 
                 <p className="text-[11px] text-slate-400 dark:text-slate-500 text-center font-medium">
-                  💡 Les particules (to, a/the, one's...) sont facultatives
+                  {activeDirection === "en_fr"
+                    ? "💡 Articles et nuances acceptés. L'IA évalue la fidélité du sens."
+                    : "💡 Les particules (to, a/the, one's...) sont facultatives."}
                 </p>
 
-                <button
-                  type="submit"
-                  className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-2xl shadow-md shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-95 transition"
-                >
-                  <span>Valider</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                {quizState === "evaluating" ? (
+                  <div className="w-full py-3 px-4 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 font-bold rounded-2xl flex items-center justify-center gap-2 animate-pulse">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Vérification de la réponse en cours…</span>
+                  </div>
+                ) : (
+                  <button
+                    type="submit"
+                    className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-2xl shadow-md shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-95 transition"
+                  >
+                    <span>Valider</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
               </form>
+            )}
+
+            {/* État : Évaluation incertaine / panne IA */}
+            {quizState === "uncertain" && (
+              <div className="space-y-3 animate-pop-in">
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700 rounded-2xl">
+                  <div className="flex items-start gap-3">
+                    <HelpCircle className="w-6 h-6 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-sm font-black text-amber-900 dark:text-amber-200">
+                        Vérification incertaine
+                      </h4>
+                      <p className="text-xs text-amber-800/90 dark:text-amber-300/90 mt-1">
+                        {uncertainDetails?.explanation || "La réponse n'a pas pu être validée avec certitude à distance."}
+                      </p>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
+                        Traduction de référence recommandée : <span className="font-bold text-slate-900 dark:text-white">« {uncertainDetails?.reference || activeWord?.french_translations?.[0]} »</span>
+                      </p>
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1 italic">
+                        Aucun échec n'a été comptabilisé sur votre progression SRS.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleRetryCurrent}
+                    className="flex-1 py-3 px-3 bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white border border-slate-200 dark:border-slate-700 font-bold rounded-2xl text-xs transition"
+                  >
+                    Réessayer
+                  </button>
+                  <button
+                    onClick={handleSkipWithoutPenalty}
+                    className="flex-1 py-3 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl text-xs shadow-md shadow-indigo-500/20 transition"
+                  >
+                    Passer la carte
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* Feedback : Bonne réponse */}
@@ -642,7 +975,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                         </span>
                         <button
                           type="button"
-                          onClick={() => playPronunciation(activeWord.english_word)}
+                          onClick={() => playPronunciation(activeWord.english_word, "en-US")}
                           className="p-1.5 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-full transition"
                           title="Écouter la prononciation"
                         >
@@ -655,36 +988,42 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                           Réponse attendue :
                         </p>
                         <p className="text-2xl font-black text-emerald-950 dark:text-emerald-50 tracking-tight">
-                          {activeWord.english_word}
+                          {activeDirection === "en_fr" ? (resultSnapshot?.reference || activeWord.french_translations?.[0]) : activeWord.english_word}
                         </p>
                       </div>
 
-                      {/* Saisie de l'utilisateur si différente de la casse/forme principale */}
-                      {activeUserAnswer && activeUserAnswer.trim().toLowerCase() !== activeWord.english_word.trim().toLowerCase() && (
-                        <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
-                          Votre saisie : <span className="font-semibold">« {activeUserAnswer.trim()} »</span> (acceptée)
+                      {/* Explication ou saisie utilisateur */}
+                      {resultSnapshot?.explanation && resultSnapshot.explanation !== "Bonne réponse !" && (
+                        <p className="text-xs text-emerald-800 dark:text-emerald-200 mt-1 font-medium">
+                          💡 {resultSnapshot.explanation}
                         </p>
                       )}
 
-                      {/* Explication du résultat selon le mode */}
+                      {activeUserAnswer && (
+                        <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-1">
+                          Votre saisie : <span className="font-semibold">« {activeUserAnswer.trim()} »</span> (validée)
+                        </p>
+                      )}
+
+                      {/* Explication du résultat selon le mode et direction */}
                       <div className="mt-2.5 pt-2 border-t border-emerald-200/80 dark:border-emerald-800/60 text-xs text-emerald-800 dark:text-emerald-200 font-medium">
                         {quizMode === "free-practice" ? (
-                          <p>🎯 Bonne réponse ! (Mode entraînement libre sans modification SRS)</p>
-                        ) : activeUpdatedWord?.isMastered ? (
+                          <p>🎯 Bonne réponse ! (Mode entraînement libre)</p>
+                        ) : updatedProg.isMastered ? (
                           <p className="font-bold text-amber-800 dark:text-amber-200">
-                            🏆 Palier 10 validé : Mot consolidé et maîtrisé !
+                            🏆 Palier 10 validé : Mot consolidé et maîtrisé dans ce sens !
                           </p>
-                        ) : activeUpdatedWord?.srsStage === 1 && !activeWord.learned ? (
+                        ) : updatedProg.stage === 1 && !activeProg.learned ? (
                           <p className="font-bold">
                             🎉 3 réussites consécutives ! Promotion au Palier 1 (Revue demain J+1).
                           </p>
-                        ) : activeUpdatedWord?.srsStage > 0 ? (
+                        ) : updatedProg.stage > 0 ? (
                           <p>
-                            ✅ <b>{srsService.getStageInfo(activeUpdatedWord.srsStage).label}</b> validé ! Prochaine révision : <b>{srsService.formatRelativeReviewDate(activeUpdatedWord.nextReviewAt)?.text}</b>.
+                            ✅ <b>{srsService.getStageInfo(updatedProg.stage).label}</b> validé ! Prochaine révision : <b>{srsService.formatRelativeReviewDate(updatedProg.nextReviewAt)?.text}</b>.
                           </p>
                         ) : (
                           <p>
-                            Bravo ! ({activeUpdatedWord?.learningSuccessCount || 0}/3 ★ consécutifs requis).
+                            Bravo ! ({updatedProg.learningSuccessCount || 0}/3 ★ consécutifs requis).
                           </p>
                         )}
                       </div>
@@ -720,7 +1059,7 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                         </span>
                         <button
                           type="button"
-                          onClick={() => playPronunciation(activeWord.english_word)}
+                          onClick={() => playPronunciation(activeWord.english_word, "en-US")}
                           className="p-1.5 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 rounded-full transition"
                           title="Écouter la prononciation"
                         >
@@ -739,13 +1078,20 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                           Réponse attendue :
                         </p>
                         <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-                          {activeWord.english_word}
+                          {activeDirection === "en_fr" ? (resultSnapshot?.reference || activeWord.french_translations?.[0]) : activeWord.english_word}
                         </p>
                       </div>
 
-                      {activeWord.accepted_answers && activeWord.accepted_answers.length > 0 && (
+                      {/* Explication IA si disponible */}
+                      {resultSnapshot?.explanation && resultSnapshot.explanation !== "Réponse incorrecte" && (
+                        <p className="text-xs text-rose-700 dark:text-rose-300 mt-1 font-medium">
+                          💡 {resultSnapshot.explanation}
+                        </p>
+                      )}
+
+                      {activeDirection === "en_fr" && activeWord.french_translations && activeWord.french_translations.length > 1 && (
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                          Variantes acceptées : {activeWord.accepted_answers.join(", ")}
+                          Traductions acceptées : {activeWord.french_translations.join(", ")}
                         </p>
                       )}
 
@@ -753,17 +1099,17 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                       <div className="mt-2.5 pt-2 border-t border-rose-200/80 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 font-medium">
                         {quizMode === "free-practice" ? (
                           <p>Entraînement libre : aucun impact sur vos paliers SRS.</p>
-                        ) : activeWord.srsStage >= 2 ? (
+                        ) : activeProg.stage >= 2 ? (
                           <p>
-                            ↩️ Rétrogradation douce au <b>{srsService.getStageInfo(activeUpdatedWord?.srsStage || 0).label}</b> (Revue urgente demain à J+1).
+                            ↩️ Rétrogradation douce au <b>{srsService.getStageInfo(updatedProg.stage || 0).label}</b> (Revue urgente demain à J+1).
                           </p>
-                        ) : activeWord.srsStage === 1 ? (
+                        ) : activeProg.stage === 1 ? (
                           <p>
                             ↩️ Retour au palier d'apprentissage initial (0/3 ★).
                           </p>
                         ) : (
                           <p>
-                            Compteur d'apprentissage remis à 0/3 ★ consécutifs.
+                            Compteur d'apprentissage remis à 0/3 ★ consécutifs dans ce sens.
                           </p>
                         )}
                       </div>

@@ -10,7 +10,8 @@ import {
   Bell,
   Clock,
   Sparkles,
-  Calendar
+  Calendar,
+  Pencil
 } from "lucide-react";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 import { storageService } from "../services/storageService";
@@ -42,14 +43,28 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 export function WordList({ words, onWordsUpdate, onOpenAdd }) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [direction, setDirection] = useState(() => {
+    const pref = storageService.getQuizDirectionPreference();
+    return pref === "en_fr" ? "en_fr" : "fr_en";
+  });
   const [filterType, setFilterType] = useState("all"); // "all" | "due" | "learning" | "reviewing" | "mastered"
   const [selectedLetter, setSelectedLetter] = useState(null); // null = toutes les lettres, ou 'A', 'B', etc.
+  const [editingWordId, setEditingWordId] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
 
-  // Statistiques SRS
-  const dueCount = useMemo(() => words.filter((w) => srsService.isReviewDue(w)).length, [words]);
-  const learningCount = useMemo(() => words.filter((w) => (w.srsStage || 0) === 0 && !w.learned).length, [words]);
-  const reviewingCount = useMemo(() => words.filter((w) => (w.srsStage || 0) >= 1 && (w.srsStage || 0) < 10 && !w.isMastered).length, [words]);
-  const masteredCount = useMemo(() => words.filter((w) => w.isMastered || (w.srsStage || 0) >= 10).length, [words]);
+  // Statistiques SRS selon la direction active
+  const dueCount = useMemo(() => words.filter((w) => srsService.isReviewDue(w, new Date(), direction)).length, [words, direction]);
+  const learningCount = useMemo(() => words.filter((w) => srsService.isLearning(w, direction)).length, [words, direction]);
+  const reviewingCount = useMemo(() => words.filter((w) => {
+    const prog = srsService.getProgress(w, direction);
+    return prog.stage >= 1 && prog.stage < 10 && !prog.isMastered;
+  }).length, [words, direction]);
+  const masteredCount = useMemo(() => words.filter((w) => {
+    const prog = srsService.getProgress(w, direction);
+    return prog.isMastered || prog.stage >= 10;
+  }).length, [words, direction]);
 
   // Calcul du nombre de mots par lettre
   const letterCounts = useMemo(() => {
@@ -80,18 +95,20 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
 
       if (!matchesQuery) return false;
 
-      // Filtre par catégorie SRS
-      if (filterType === "due" && !srsService.isReviewDue(w)) return false;
-      if (filterType === "learning" && ((w.srsStage || 0) > 0 || w.learned)) return false;
-      if (filterType === "reviewing" && ((w.srsStage || 0) === 0 || (w.srsStage || 0) >= 10 || w.isMastered)) return false;
-      if (filterType === "mastered" && !w.isMastered && (w.srsStage || 0) < 10) return false;
+      const prog = srsService.getProgress(w, direction);
+
+      // Filtre par catégorie SRS selon la direction
+      if (filterType === "due" && !srsService.isReviewDue(w, new Date(), direction)) return false;
+      if (filterType === "learning" && (prog.stage > 0 || prog.learned)) return false;
+      if (filterType === "reviewing" && (prog.stage === 0 || prog.stage >= 10 || prog.isMastered)) return false;
+      if (filterType === "mastered" && !prog.isMastered && prog.stage < 10) return false;
 
       // Filtre alphabétique
       if (selectedLetter && getFirstLetter(w) !== selectedLetter) return false;
 
       return true;
     });
-  }, [words, searchQuery, filterType, selectedLetter]);
+  }, [words, searchQuery, filterType, selectedLetter, direction]);
 
   const playPronunciation = (text, e) => {
     if (e) e.stopPropagation();
@@ -114,12 +131,60 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
 
   const handleResetProgress = (id, e) => {
     if (e) e.stopPropagation();
-    const updated = storageService.resetWordProgress(id);
+    const updated = storageService.resetWordProgress(id, direction);
     onWordsUpdate(updated);
   };
 
+  const showToast = (message) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3000);
+  };
+
+  const handleStartEdit = (word, e) => {
+    if (e) e.stopPropagation();
+    setEditingWordId(word.id);
+    const note = word.exampleSentence || word.example_sentence || word.notes || "";
+    setEditText(note);
+  };
+
+  const handleCancelEdit = (e) => {
+    if (e) e.stopPropagation();
+    setEditingWordId(null);
+    setEditText("");
+  };
+
+  const handleSaveEdit = async (wordId, e) => {
+    if (e) e.stopPropagation();
+    setIsSaving(true);
+    try {
+      const cleanText = editText.trim();
+      const res = await storageService.updateContextNote(wordId, cleanText);
+      onWordsUpdate(res.words);
+      setEditingWordId(null);
+      setEditText("");
+      showToast(cleanText ? "Descriptif mis à jour avec succès !" : "Descriptif supprimé.");
+    } catch (err) {
+      console.error("Erreur enregistrement descriptif :", err);
+      showToast("Erreur lors de l'enregistrement du descriptif.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
-    <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-2 pb-24 space-y-3.5 animate-fade-in">
+    <div className="flex-1 flex flex-col max-w-md mx-auto w-full px-4 pt-2 pb-24 space-y-3.5 animate-fade-in relative">
+      
+      {/* Toast de confirmation visible */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-xs w-full px-4 animate-fade-in pointer-events-none">
+          <div className="bg-slate-900 text-white dark:bg-white dark:text-slate-900 px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 text-xs font-bold border border-slate-700/50 dark:border-slate-200">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 dark:text-emerald-600 shrink-0" />
+            <span className="flex-1">{toastMessage}</span>
+          </div>
+        </div>
+      )}
       
       {/* En-tête de la page */}
       <div className="flex items-center justify-between">
@@ -156,6 +221,30 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
             <X className="w-4 h-4" />
           </button>
         )}
+      </div>
+
+      {/* Sélecteur de Sens de Progression */}
+      <div className="bg-slate-100 dark:bg-slate-800/80 p-0.5 rounded-xl flex items-center gap-1 border border-slate-200/80 dark:border-slate-700/60 text-xs">
+        <button
+          onClick={() => setDirection("fr_en")}
+          className={`flex-1 py-1 px-2 rounded-lg font-bold transition text-center ${
+            direction === "fr_en"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          🇫🇷 → 🇬🇧 Français → Anglais
+        </button>
+        <button
+          onClick={() => setDirection("en_fr")}
+          className={`flex-1 py-1 px-2 rounded-lg font-bold transition text-center ${
+            direction === "en_fr"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          🇬🇧 → 🇫🇷 Anglais → Français
+        </button>
       </div>
 
       {/* Filtres SRS par statut */}
@@ -312,20 +401,21 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
               color: "bg-slate-100 text-slate-700"
             };
 
-            const stage = word.srsStage || (word.learned ? 1 : 0);
+            const prog = srsService.getProgress(word, direction);
+            const stage = prog.stage;
             const stageInfo = srsService.getStageInfo(stage);
-            const isDue = srsService.isReviewDue(word);
-            const relativeDate = srsService.formatRelativeReviewDate(word.nextReviewAt);
+            const isDue = srsService.isReviewDue(word, new Date(), direction);
+            const relativeDate = srsService.formatRelativeReviewDate(prog.nextReviewAt);
 
             return (
               <div
                 key={word.id}
                 className={`bg-white dark:bg-slate-900 rounded-2xl p-3.5 border transition-all shadow-xs ${
-                  word.isMastered || stage >= 10
+                  prog.isMastered || stage >= 10
                     ? "border-amber-300/80 dark:border-amber-800/60 bg-amber-50/20"
                     : isDue
                     ? "border-amber-400 dark:border-amber-600 bg-amber-50/30 ring-1 ring-amber-400"
-                    : word.learned || stage > 0
+                    : prog.learned || stage > 0
                     ? "border-indigo-200/80 dark:border-indigo-950 bg-indigo-50/10"
                     : "border-slate-200/80 dark:border-slate-800 hover:border-slate-300"
                 }`}
@@ -362,17 +452,101 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                       ))}
                     </div>
 
-                    {/* Note de contexte / Précision de sens */}
-                    {(word.exampleSentence || word.example_sentence || word.notes) && (
-                      <p className="text-[11px] text-amber-700/90 dark:text-amber-300/80 italic mt-1.5 flex items-start gap-1">
-                        <span className="font-semibold not-italic text-amber-600 dark:text-amber-400">💡</span>
-                        <span>{word.exampleSentence || word.example_sentence || word.notes}</span>
-                      </p>
+                    {/* Note de contexte / Précision de sens - Consultation & Édition */}
+                    {editingWordId === word.id ? (
+                      <div 
+                        onClick={(e) => e.stopPropagation()} 
+                        className="mt-2.5 p-3 bg-amber-50/70 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/80 rounded-xl space-y-2 animate-fade-in"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                            Note de contexte
+                          </span>
+                          <span className="text-[10px] text-amber-700/80 dark:text-amber-400">
+                            (Indice au quiz)
+                          </span>
+                        </div>
+
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          placeholder="Ex: aboyer (pour un chien), écorce d'un arbre..."
+                          rows={2}
+                          autoFocus
+                          className="w-full p-2 text-xs bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-inner resize-y"
+                        />
+
+                        <p className="text-[11px] text-amber-800/90 dark:text-amber-300/80 leading-snug">
+                          💡 Donne un indice de sens ou d’usage sans révéler la traduction attendue.
+                        </p>
+
+                        <div className="flex items-center justify-between pt-1">
+                          {editText.trim() ? (
+                            <button
+                              type="button"
+                              onClick={() => setEditText("")}
+                              className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline"
+                            >
+                              Effacer le texte
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic">Champ vide = suppression</span>
+                          )}
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={handleCancelEdit}
+                              disabled={isSaving}
+                              className="px-2.5 py-1 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg transition"
+                            >
+                              Annuler
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleSaveEdit(word.id, e)}
+                              disabled={isSaving}
+                              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold rounded-lg shadow-xs transition flex items-center gap-1"
+                            >
+                              {isSaving ? "Enregistrement..." : "Enregistrer"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (word.exampleSentence || word.example_sentence || word.notes) ? (
+                      <div className="mt-1.5 flex items-start justify-between gap-1.5 group">
+                        <p className="text-[11px] text-amber-700/90 dark:text-amber-300/80 italic flex items-start gap-1 min-w-0 flex-1">
+                          <span className="font-semibold not-italic text-amber-600 dark:text-amber-400 shrink-0">💡</span>
+                          <span className="break-words">{word.exampleSentence || word.example_sentence || word.notes}</span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={(e) => handleStartEdit(word, e)}
+                          className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition shrink-0"
+                          title="Modifier le descriptif"
+                          aria-label="Modifier le descriptif"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-1">
+                        <button
+                          type="button"
+                          onClick={(e) => handleStartEdit(word, e)}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition py-0.5 rounded"
+                          title="Ajouter un descriptif"
+                          aria-label="Ajouter un descriptif"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Ajouter un descriptif</span>
+                        </button>
+                      </div>
                     )}
 
                     {/* Date de révision / Détail du palier */}
                     <div className="flex items-center gap-2 mt-2 text-[11px]">
-                      {word.isMastered || stage >= 10 ? (
+                      {prog.isMastered || stage >= 10 ? (
                         <span className="text-amber-800 dark:text-amber-300 font-bold flex items-center gap-1">
                           🏆 Maîtrisé (~5 mois et demi validés)
                         </span>
@@ -388,7 +562,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                         </span>
                       ) : (
                         <span className="text-slate-400">
-                          Apprentissage initial ({word.learningSuccessCount || 0}/3 ★)
+                          Apprentissage initial ({prog.learningSuccessCount || 0}/3 ★)
                         </span>
                       )}
                     </div>
@@ -396,7 +570,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
 
                   {/* Statut SRS & Actions */}
                   <div className="flex flex-col items-end gap-1.5">
-                    {word.isMastered || stage >= 10 ? (
+                    {prog.isMastered || stage >= 10 ? (
                       <span className="flex items-center gap-1 text-[11px] font-bold text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-700">
                         🏆 Maîtrisé
                       </span>
@@ -410,7 +584,7 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                           <span
                             key={idx}
                             className={
-                              idx < (word.learningSuccessCount ?? word.successCount ?? 0)
+                              idx < (prog.learningSuccessCount || 0)
                                 ? "text-amber-400 font-bold"
                                 : "text-slate-200 dark:text-slate-700"
                             }
@@ -422,11 +596,11 @@ export function WordList({ words, onWordsUpdate, onOpenAdd }) {
                     )}
 
                     <div className="flex items-center gap-1">
-                      {((word.learningSuccessCount || 0) > 0 || stage > 0) && (
+                      {((prog.learningSuccessCount || 0) > 0 || stage > 0) && (
                         <button
                           onClick={(e) => handleResetProgress(word.id, e)}
                           className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition rounded"
-                          title="Remettre à zéro"
+                          title="Remettre à zéro ce sens"
                         >
                           <RotateCcw className="w-3 h-3" />
                         </button>

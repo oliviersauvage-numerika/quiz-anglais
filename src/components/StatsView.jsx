@@ -1,17 +1,28 @@
-import React from "react";
+import React, { useState } from "react";
 import { Award, Flame, CheckCircle, Target, BookOpen, Layers, Clock, Bell, Sparkles } from "lucide-react";
 import { storageService } from "../services/storageService";
 import { srsService } from "../services/srsService";
 import { PART_OF_SPEECH_LABELS } from "../services/translationService";
 
 export function StatsView({ words }) {
+  const [direction, setDirection] = useState(() => {
+    const pref = storageService.getQuizDirectionPreference();
+    return pref === "en_fr" ? "en_fr" : "fr_en";
+  });
+
   const stats = storageService.getGlobalStats();
   const totalWords = words.length;
 
-  const dueCount = words.filter((w) => srsService.isReviewDue(w)).length;
-  const learningCount = words.filter((w) => (w.srsStage || 0) === 0 && !w.learned).length;
-  const reviewingCount = words.filter((w) => (w.srsStage || 0) >= 1 && (w.srsStage || 0) < 10 && !w.isMastered).length;
-  const masteredCount = words.filter((w) => w.isMastered || (w.srsStage || 0) >= 10).length;
+  const dueCount = words.filter((w) => srsService.isReviewDue(w, new Date(), direction)).length;
+  const learningCount = words.filter((w) => srsService.isLearning(w, direction)).length;
+  const reviewingCount = words.filter((w) => {
+    const prog = srsService.getProgress(w, direction);
+    return prog.stage >= 1 && prog.stage < 10 && !prog.isMastered;
+  }).length;
+  const masteredCount = words.filter((w) => {
+    const prog = srsService.getProgress(w, direction);
+    return prog.isMastered || prog.stage >= 10;
+  }).length;
 
   const progressPercent = totalWords > 0 ? Math.round(((reviewingCount + masteredCount) / totalWords) * 100) : 0;
 
@@ -20,7 +31,8 @@ export function StatsView({ words }) {
     const pos = w.part_of_speech || "other";
     if (!acc[pos]) acc[pos] = { total: 0, learned: 0 };
     acc[pos].total += 1;
-    if (w.learned || (w.srsStage || 0) > 0) acc[pos].learned += 1;
+    const prog = srsService.getProgress(w, direction);
+    if (prog.learned || prog.stage > 0) acc[pos].learned += 1;
     return acc;
   }, {});
 
@@ -33,6 +45,30 @@ export function StatsView({ words }) {
       <div>
         <h1 className="text-2xl font-black text-slate-900 dark:text-white">Progression</h1>
         <p className="text-xs text-slate-500 dark:text-slate-400">Répétition espacée & statistiques</p>
+      </div>
+
+      {/* Sélecteur de direction pour les statistiques */}
+      <div className="bg-slate-100 dark:bg-slate-800/80 p-0.5 rounded-xl flex items-center gap-1 border border-slate-200/80 dark:border-slate-700/60 text-xs">
+        <button
+          onClick={() => setDirection("fr_en")}
+          className={`flex-1 py-1.5 px-2 rounded-lg font-bold transition text-center ${
+            direction === "fr_en"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          🇫🇷 → 🇬🇧 Français → Anglais
+        </button>
+        <button
+          onClick={() => setDirection("en_fr")}
+          className={`flex-1 py-1.5 px-2 rounded-lg font-bold transition text-center ${
+            direction === "en_fr"
+              ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+          }`}
+        >
+          🇬🇧 → 🇫🇷 Anglais → Français
+        </button>
       </div>
 
       {/* Carte principale de progression */}

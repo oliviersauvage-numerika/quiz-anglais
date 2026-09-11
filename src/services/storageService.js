@@ -1,11 +1,64 @@
-import { initialWords } from "../data/initialWords";
-import { syncService, fromDBWord } from "./syncService";
-import { srsService } from "./srsService";
+import { initialWords } from "../data/initialWords.js";
+import { syncService, fromDBWord } from "./syncService.js";
+import { srsService } from "./srsService.js";
 
 const STORAGE_KEY = "quiz_anglais_vocab_v2";
 const STATS_KEY = "quiz_anglais_stats_v2";
+const PENDING_UPDATES_KEY = "quiz_anglais_pending_updates_v2";
 
 export const storageService = {
+  // Gestion de la file d'attente des modifications hors-ligne
+  getPendingUpdates: () => {
+    try {
+      const stored = localStorage.getItem(PENDING_UPDATES_KEY);
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  },
+
+  addPendingUpdate: (id, updates) => {
+    try {
+      const pending = storageService.getPendingUpdates();
+      pending[String(id)] = {
+        ...(pending[String(id)] || {}),
+        ...updates,
+        _updatedAt: Date.now()
+      };
+      localStorage.setItem(PENDING_UPDATES_KEY, JSON.stringify(pending));
+    } catch (e) {
+      console.warn("Erreur stockage modification en attente :", e);
+    }
+  },
+
+  clearPendingUpdate: (id) => {
+    try {
+      const pending = storageService.getPendingUpdates();
+      delete pending[String(id)];
+      localStorage.setItem(PENDING_UPDATES_KEY, JSON.stringify(pending));
+    } catch (e) {
+      console.warn("Erreur suppression modification en attente :", e);
+    }
+  },
+
+  flushPendingUpdates: async () => {
+    const pending = storageService.getPendingUpdates();
+    const ids = Object.keys(pending);
+    if (ids.length === 0) return;
+
+    for (const id of ids) {
+      const { _updatedAt, ...updates } = pending[id];
+      try {
+        const res = await syncService.updateWord(id, updates);
+        if (res && res.success) {
+          storageService.clearPendingUpdate(id);
+        }
+      } catch (err) {
+        console.warn(`Synchronisation différée échouée pour le mot ${id} :`, err);
+      }
+    }
+  },
+
   // Lecture synchrone immédiate depuis le cache local avec nettoyage/assainissement
   getWords: () => {
     try {
@@ -37,6 +90,9 @@ export const storageService = {
   // Rafraîchir les mots depuis Supabase et mettre à jour le cache local
   refreshFromSupabase: async () => {
     try {
+      // 0. Appliquer d'abord les éventuelles modifications hors-ligne en attente
+      await storageService.flushPendingUpdates();
+
       const res = await syncService.fetchWords();
       if (res.success && Array.isArray(res.words)) {
         const localWords = storageService.getWords();
@@ -185,15 +241,70 @@ export const storageService = {
   // Mettre à jour un mot
   updateWord: async (id, updates) => {
     const words = storageService.getWords();
-    const updated = words.map((w) => (w.id === id ? srsService.sanitizeWord({ ...w, ...updates }) : w));
+    const updated = words.map((w) => (String(w.id) === String(id) ? srsService.sanitizeWord({ ...w, ...updates }) : w));
     storageService.saveWordsLocally(updated);
 
     // Synchronisation en base de données Supabase
     let syncRes = null;
     try {
       syncRes = await syncService.updateWord(id, updates);
+      if (!syncRes || !syncRes.success) {
+        storageService.addPendingUpdate(id, updates);
+      } else {
+        storageService.clearPendingUpdate(id);
+      }
     } catch (e) {
-      console.warn("Erreur mise à jour Supabase :", e);
+      console.warn("Erreur mise à jour Supabase, mise en attente hors-ligne :", e);
+      storageService.addPendingUpdate(id, updates);
+      syncRes = { success: false, error: e.message };
+    }
+
+    return { words: updated, syncRes };
+  },
+
+  // Mettre à jour spécifiquement le descriptif contextuel (note de contexte / indice de sens)
+  updateContextNote: async (id, newNote) => {
+    const cleanNote = (typeof newNote === "string" ? newNote.trim() : "") || null;
+    const isCleared = cleanNote === null;
+
+    const words = storageService.getWords();
+    const updated = words.map((w) => {
+      if (String(w.id) !== String(id)) return w;
+
+      const copy = { ...w };
+      if (isCleared) {
+        copy.exampleSentence = null;
+        copy.notes = null;
+        copy.example_sentence = null;
+        copy.contextNoteCleared = true;
+      } else {
+        copy.exampleSentence = cleanNote;
+        copy.notes = cleanNote;
+        copy.example_sentence = cleanNote;
+        delete copy.contextNoteCleared;
+      }
+      return srsService.sanitizeWord(copy);
+    });
+
+    storageService.saveWordsLocally(updated);
+
+    const updates = {
+      exampleSentence: cleanNote,
+      notes: cleanNote,
+      example_sentence: cleanNote
+    };
+
+    let syncRes = null;
+    try {
+      syncRes = await syncService.updateWord(id, updates);
+      if (!syncRes || !syncRes.success) {
+        storageService.addPendingUpdate(id, updates);
+      } else {
+        storageService.clearPendingUpdate(id);
+      }
+    } catch (e) {
+      console.warn("Erreur synchronisation note Supabase, en attente hors-ligne :", e);
+      storageService.addPendingUpdate(id, updates);
       syncRes = { success: false, error: e.message };
     }
 
@@ -212,35 +323,71 @@ export const storageService = {
     return updated;
   },
 
-  // Enregistrer le résultat du quiz avec prise en compte du mode ("initial-learning" | "srs-review" | "free-practice")
-  recordQuizResult: (id, isCorrect, mode = "srs-review") => {
+  // Gestion de la préférence de direction ("fr_en" | "en_fr" | "mixed")
+  getQuizDirectionPreference: () => {
+    try {
+      const saved = localStorage.getItem("quiz_anglais_direction_preference");
+      if (saved === "fr_en" || saved === "en_fr" || saved === "mixed") {
+        return saved;
+      }
+    } catch {}
+    return "fr_en"; // Par défaut Français -> Anglais
+  },
+
+  setQuizDirectionPreference: (direction) => {
+    try {
+      if (["fr_en", "en_fr", "mixed"].includes(direction)) {
+        localStorage.setItem("quiz_anglais_direction_preference", direction);
+      }
+    } catch {}
+  },
+
+  // Enregistrer le résultat du quiz avec prise en compte du mode et de la direction
+  // mode: "initial-learning" | "srs-review" | "free-practice"
+  // direction: "fr_en" | "en_fr"
+  recordQuizResult: (id, isCorrect, mode = "srs-review", direction = "fr_en") => {
     const words = storageService.getWords();
     let updatedWord = null;
 
     const updated = words.map((w) => {
       if (w.id !== id) return w;
-      updatedWord = srsService.calculateNextState(w, isCorrect, mode);
+      updatedWord = srsService.calculateNextState(w, isCorrect, mode, null, direction);
       return updatedWord;
     });
 
     storageService.saveWordsLocally(updated);
 
     if (updatedWord) {
-      syncService.updateWord(id, {
-        successCount: updatedWord.learningSuccessCount,
-        learningSuccessCount: updatedWord.learningSuccessCount,
-        totalCorrectAnswers: updatedWord.totalCorrectAnswers,
-        learned: updatedWord.learned,
-        srsStage: updatedWord.srsStage,
-        firstLearnedAt: updatedWord.firstLearnedAt,
-        nextReviewAt: updatedWord.nextReviewAt,
-        lastSrsReviewAt: updatedWord.lastSrsReviewAt,
-        lastReviewedAt: updatedWord.lastSrsReviewAt,
-        isMastered: updatedWord.isMastered,
-        lastAnsweredAt: updatedWord.lastAnsweredAt,
-        lastAnswered: updatedWord.lastAnsweredAt,
-        lastCorrect: updatedWord.lastCorrect
-      });
+      if (direction === "en_fr") {
+        syncService.updateWord(id, {
+          srsStage_en_fr: updatedWord.srsStage_en_fr,
+          learningSuccessCount_en_fr: updatedWord.learningSuccessCount_en_fr,
+          totalCorrectAnswers_en_fr: updatedWord.totalCorrectAnswers_en_fr,
+          learned_en_fr: updatedWord.learned_en_fr,
+          firstLearnedAt_en_fr: updatedWord.firstLearnedAt_en_fr,
+          nextReviewAt_en_fr: updatedWord.nextReviewAt_en_fr,
+          lastSrsReviewAt_en_fr: updatedWord.lastSrsReviewAt_en_fr,
+          isMastered_en_fr: updatedWord.isMastered_en_fr,
+          lastAnsweredAt_en_fr: updatedWord.lastAnsweredAt_en_fr,
+          lastCorrect_en_fr: updatedWord.lastCorrect_en_fr
+        });
+      } else {
+        syncService.updateWord(id, {
+          successCount: updatedWord.learningSuccessCount,
+          learningSuccessCount: updatedWord.learningSuccessCount,
+          totalCorrectAnswers: updatedWord.totalCorrectAnswers,
+          learned: updatedWord.learned,
+          srsStage: updatedWord.srsStage,
+          firstLearnedAt: updatedWord.firstLearnedAt,
+          nextReviewAt: updatedWord.nextReviewAt,
+          lastSrsReviewAt: updatedWord.lastSrsReviewAt,
+          lastReviewedAt: updatedWord.lastSrsReviewAt,
+          isMastered: updatedWord.isMastered,
+          lastAnsweredAt: updatedWord.lastAnsweredAt,
+          lastAnswered: updatedWord.lastAnsweredAt,
+          lastCorrect: updatedWord.lastCorrect
+        });
+      }
     }
 
     // Les statistiques globales sont incrémentées pour tous les modes
@@ -248,24 +395,42 @@ export const storageService = {
     return { words: updated, updatedWord };
   },
 
-  // Réinitialiser la progression d'un mot ou de tous les mots
-  resetWordProgress: (id) => {
+  // Réinitialiser la progression d'un mot ou de tous les mots (support ciblé par direction)
+  resetWordProgress: (id, direction = "both") => {
     const words = storageService.getWords();
-    const updated = words.map((w) => 
-      w.id === id ? srsService.sanitizeWord({ 
-        ...w, 
-        learningSuccessCount: 0, 
-        successCount: 0,
-        totalCorrectAnswers: 0,
-        learned: false, 
-        srsStage: 0, 
-        firstLearnedAt: undefined, 
-        nextReviewAt: null, 
-        lastSrsReviewAt: undefined, 
-        lastReviewedAt: undefined, 
-        isMastered: false 
-      }) : w
-    );
+    const updated = words.map((w) => {
+      if (w.id !== id) return w;
+
+      const resetFrEn = direction === "both" || direction === "fr_en";
+      const resetEnFr = direction === "both" || direction === "en_fr";
+
+      const modified = { ...w };
+      if (resetFrEn) {
+        modified.learningSuccessCount = 0;
+        modified.successCount = 0;
+        modified.totalCorrectAnswers = 0;
+        modified.learned = false;
+        modified.srsStage = 0;
+        modified.firstLearnedAt = undefined;
+        modified.nextReviewAt = null;
+        modified.lastSrsReviewAt = undefined;
+        modified.lastReviewedAt = undefined;
+        modified.isMastered = false;
+      }
+      if (resetEnFr) {
+        modified.learningSuccessCount_en_fr = 0;
+        modified.totalCorrectAnswers_en_fr = 0;
+        modified.learned_en_fr = false;
+        modified.srsStage_en_fr = 0;
+        modified.firstLearnedAt_en_fr = undefined;
+        modified.nextReviewAt_en_fr = null;
+        modified.lastSrsReviewAt_en_fr = undefined;
+        modified.isMastered_en_fr = false;
+      }
+
+      return srsService.sanitizeWord(modified);
+    });
+
     storageService.saveWordsLocally(updated);
     syncService.updateWord(id, { 
       successCount: 0, 
@@ -359,3 +524,10 @@ export const storageService = {
     }
   }
 };
+
+// Vider automatiquement la file d'attente hors-ligne dès que la connexion Internet est rétablie
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("online", () => {
+    storageService.flushPendingUpdates().catch(() => {});
+  });
+}

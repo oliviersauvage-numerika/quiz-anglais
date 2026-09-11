@@ -546,6 +546,18 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
     }
   };
 
+  // Validation manuelle par l'utilisateur en cas d'évaluation incertaine ou hors-ligne
+  const handleManualValidation = (isCorrect) => {
+    isSubmittingRef.current = false;
+    finalizeSubmission(isCorrect, {
+      explanation: isCorrect 
+        ? "Réponse validée manuellement par l'apprenant."
+        : "Comptabilisée comme erreur par l'apprenant.",
+      reference: uncertainDetails?.reference || currentWord?.french_translations?.[0]
+    });
+    setUncertainDetails(null);
+  };
+
   // Passer sans pénalité SRS en cas d'incertitude ou hors-ligne
   const handleSkipWithoutPenalty = () => {
     isSubmittingRef.current = false;
@@ -945,19 +957,37 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleRetryCurrent}
-                    className="flex-1 py-3 px-3 bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white border border-slate-200 dark:border-slate-700 font-bold rounded-2xl text-xs transition"
-                  >
-                    Réessayer
-                  </button>
-                  <button
-                    onClick={handleSkipWithoutPenalty}
-                    className="flex-1 py-3 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl text-xs shadow-md shadow-indigo-500/20 transition"
-                  >
-                    Passer la carte
-                  </button>
+                <div className="flex flex-col gap-2 pt-1">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleManualValidation(true)}
+                      className="flex-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Valider ma réponse
+                    </button>
+                    <button
+                      onClick={() => handleManualValidation(false)}
+                      className="flex-1 py-2.5 px-3 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      Compter comme erreur
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleRetryCurrent}
+                      className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl text-xs transition"
+                    >
+                      Réessayer
+                    </button>
+                    <button
+                      onClick={handleSkipWithoutPenalty}
+                      className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium rounded-xl text-xs transition"
+                    >
+                      Passer sans pénalité
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

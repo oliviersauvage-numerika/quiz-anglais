@@ -1,3 +1,5 @@
+import { srsService } from "./srsService.js";
+
 // Service de recherche & traduction (Anglais -> Français) avec support Gemini et Moteur Intégré
 
 export const PART_OF_SPEECH_LABELS = {
@@ -58,6 +60,10 @@ export const translationService = {
     }
   },
 
+  getStoredApiKey: () => {
+    return translationService.getGeminiApiKey();
+  },
+
   setGeminiApiKey: (key) => {
     try {
       if (!key || !key.trim()) {
@@ -68,6 +74,10 @@ export const translationService = {
     } catch (e) {
       console.error(e);
     }
+  },
+
+  setStoredApiKey: (key) => {
+    translationService.setGeminiApiKey(key);
   },
 
   /**
@@ -344,8 +354,9 @@ Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
   },
 
   /**
-   * Évaluation sémantique d'une réponse en français via Gemini (Anglais -> Français)
+   * Évaluation sémantique d'une réponse en français (Anglais -> Français)
    * Utilisée en étape 2 lorsque la vérification locale stricte n'a pas trouvé de correspondance directe.
+   * Utilise Gemini si configuré, avec repli automatique sur le dictionnaire intégré si indisponible.
    */
   evaluateFrenchAnswerSemantic: async ({
     englishWord,
@@ -355,16 +366,6 @@ Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
     userAnswer,
     apiKey
   }) => {
-    const key = (apiKey || translationService.getStoredApiKey() || "").trim();
-    if (!key) {
-      return {
-        evaluation: "uncertain",
-        reason: "no_api_key",
-        explanation: "Vérification du sens nécessite une connexion et une clé API configurée.",
-        reference: referenceTranslations[0] || englishWord
-      };
-    }
-
     const cleanAnswer = (userAnswer || "").trim();
     if (!cleanAnswer) {
       return {
@@ -374,7 +375,12 @@ Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
       };
     }
 
-    const prompt = `Tu es un examinateur linguistique de référence pour un test d'anglais-français.
+    const key = (apiKey || translationService.getGeminiApiKey() || "").trim();
+
+    // 1. Évaluation sémantique via Gemini si une clé est disponible
+    if (key) {
+      try {
+        const prompt = `Tu es un examinateur linguistique de référence pour un test d'anglais-français.
 Un apprenant doit traduire en FRANÇAIS le mot ou l'expression anglaise suivante.
 
 DONNÉES :
@@ -397,81 +403,104 @@ Réponds EXCLUSIVEMENT sous la forme d'un objet JSON valide :
   "reference": "Traduction de référence recommandée"
 }`;
 
-    const availableModels = await translationService.getAvailableModels(key);
-    let lastError = null;
-    let data = null;
+        const availableModels = await translationService.getAvailableModels(key);
+        let data = null;
 
-    for (const m of availableModels) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        for (const m of availableModels) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
 
-        const url = `https://generativelanguage.googleapis.com/${m.version}/models/${m.id}:generateContent?key=${key}`;
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.0,
-              responseMimeType: "application/json"
+            const url = `https://generativelanguage.googleapis.com/${m.version}/models/${m.id}:generateContent?key=${key}`;
+            const response = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              signal: controller.signal,
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                  temperature: 0.1
+                }
+              })
+            });
+
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+              data = await response.json();
+              break;
             }
-          })
-        });
-
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          data = await response.json();
-          break;
-        } else {
-          const err = await response.json().catch(() => ({}));
-          lastError = err.error?.message || `Erreur API Gemini (${response.status})`;
+          } catch {
+            // Continuer vers le modèle suivant
+          }
         }
-      } catch (e) {
-        lastError = e.name === "AbortError" ? "Délai d'attente dépassé (timeout 10s)" : e.message;
+
+        if (data) {
+          const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (rawText) {
+            let text = rawText.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+            let parsed = null;
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              const start = text.indexOf("{");
+              const end = text.lastIndexOf("}");
+              if (start !== -1 && end !== -1 && end > start) {
+                try {
+                  parsed = JSON.parse(text.substring(start, end + 1));
+                } catch {}
+              }
+            }
+
+            if (parsed && typeof parsed.evaluation === "string") {
+              const evalVal = parsed.evaluation.toLowerCase().trim();
+              if (["correct", "incorrect", "uncertain"].includes(evalVal)) {
+                return {
+                  evaluation: evalVal,
+                  explanation: (parsed.explanation || "").trim() || (evalVal === "correct" ? "Traduction acceptée par l'analyse IA." : "Traduction non conforme."),
+                  reference: (parsed.reference || "").trim() || referenceTranslations[0] || englishWord
+                };
+              }
+            }
+          }
+        }
+      } catch (geminiErr) {
+        console.warn("Évaluation Gemini indisponible, repli dictionnaire :", geminiErr);
       }
     }
 
-    if (!data) {
-      return {
-        evaluation: "uncertain",
-        reason: "network_or_api_error",
-        explanation: `Évaluation à distance indisponible (${lastError || "erreur de connexion"}).`,
-        reference: referenceTranslations[0] || englishWord
-      };
-    }
-
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) {
-      return {
-        evaluation: "uncertain",
-        reason: "empty_response",
-        explanation: "Réponse vide de l'évaluateur.",
-        reference: referenceTranslations[0] || englishWord
-      };
-    }
-
+    // 2. Repli gracieux sur le dictionnaire intégré (MyMemory / Wiktionary)
+    // Permet de valider des synonymes légitimes même hors-ligne Gemini ou sans clé API
     try {
-      const cleanJson = rawText.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-      const parsed = JSON.parse(cleanJson);
-      const evalVal = (parsed.evaluation || "").toLowerCase().trim();
-      const validEval = ["correct", "incorrect", "uncertain"].includes(evalVal) ? evalVal : "uncertain";
-
-      return {
-        evaluation: validEval,
-        explanation: (parsed.explanation || "").trim() || (validEval === "correct" ? "Traduction acceptée." : "Traduction non conforme."),
-        reference: (parsed.reference || "").trim() || referenceTranslations[0] || englishWord
-      };
-    } catch {
-      return {
-        evaluation: "uncertain",
-        reason: "json_parse_error",
-        explanation: "Format de réponse inattendu du service d'évaluation.",
-        reference: referenceTranslations[0] || englishWord
-      };
+      if (typeof translationService.lookupBuiltIn === "function") {
+        const dictRes = await translationService.lookupBuiltIn(englishWord);
+        if (dictRes && Array.isArray(dictRes.french_translations) && dictRes.french_translations.length > 0) {
+          const tempWord = {
+            part_of_speech: partOfSpeech || dictRes.part_of_speech || "noun",
+            french_translations: dictRes.french_translations
+          };
+          if (srsService.checkFrenchAnswerLocal(cleanAnswer, tempWord)) {
+            return {
+              evaluation: "correct",
+              explanation: "Traduction valide trouvée dans le dictionnaire de référence.",
+              reference: dictRes.french_translations[0] || referenceTranslations[0] || englishWord
+            };
+          }
+        }
+      }
+    } catch (dictErr) {
+      console.warn("Échec recherche dictionnaire :", dictErr);
     }
+
+    // 3. Cas non résolu avec certitude
+    return {
+      evaluation: "uncertain",
+      reason: key ? "ambiguous_or_unreachable" : "no_api_key",
+      explanation: key
+        ? "Réponse non confirmée avec certitude à distance."
+        : "Réponse non répertoriée dans le dictionnaire local (vous pouvez la valider manuellement).",
+      reference: referenceTranslations[0] || englishWord
+    };
   },
 
   /**

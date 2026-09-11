@@ -271,4 +271,94 @@ test("8. Repli gracieux d'insertWord lorsque Supabase n'a pas encore les colonne
   assert.equal(hasEnFrCols, false, "Le 2ème appel doit avoir retiré les colonnes _en_fr");
 });
 
+test("9. evaluateFrenchAnswerSemantic fonctionne sans erreur getStoredApiKey et gère le repli dictionnaire", async () => {
+  const { translationService } = await import("../src/services/translationService.js");
+
+  // Vérifier la présence des méthodes
+  assert.equal(typeof translationService.getGeminiApiKey, "function");
+  assert.equal(typeof translationService.getStoredApiKey, "function");
+
+  // Mock lookupBuiltIn pour simuler un dictionnaire retournant des synonymes
+  translationService.lookupBuiltIn = async (word) => ({
+    english_word: word,
+    part_of_speech: "noun",
+    french_translations: ["demeure", "habitation", "résidence"]
+  });
+
+  // Test avec un synonyme trouvé dans le dictionnaire de repli (sans clé Gemini)
+  const res = await translationService.evaluateFrenchAnswerSemantic({
+    englishWord: "house",
+    partOfSpeech: "noun",
+    contextNote: "a building for human habitation",
+    referenceTranslations: ["maison"],
+    userAnswer: "demeure"
+  });
+
+  assert.equal(res.evaluation, "correct", "Le synonyme du dictionnaire doit être validé");
+  assert.match(res.explanation, /dictionnaire/i);
+
+  // Test avec une réponse introuvable
+  const resUncertain = await translationService.evaluateFrenchAnswerSemantic({
+    englishWord: "house",
+    partOfSpeech: "noun",
+    contextNote: "a building for human habitation",
+    referenceTranslations: ["maison"],
+    userAnswer: "avion"
+  });
+
+  assert.equal(resUncertain.evaluation, "uncertain");
+});
+
+test("10. evaluateFrenchAnswerSemantic valide avec succès via Gemini simulé", async () => {
+  const { translationService } = await import("../src/services/translationService.js");
+
+  // Mock fetch pour simuler l'API Gemini
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    if (url.includes("models?key=")) {
+      return {
+        ok: true,
+        json: async () => ({
+          models: [{ name: "models/gemini-1.5-flash", supportedGenerationMethods: ["generateContent"] }]
+        })
+      };
+    }
+    if (url.includes(":generateContent?key=")) {
+      return {
+        ok: true,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  evaluation: "correct",
+                  explanation: "Synonyme fidèle pour ce contexte.",
+                  reference: "Maison"
+                })
+              }]
+            }
+          }]
+        })
+      };
+    }
+    return originalFetch ? originalFetch(url) : { ok: false };
+  };
+
+  try {
+    const res = await translationService.evaluateFrenchAnswerSemantic({
+      englishWord: "house",
+      partOfSpeech: "noun",
+      referenceTranslations: ["maison"],
+      userAnswer: "logement",
+      apiKey: "AIzaMockTestKey"
+    });
+
+    assert.equal(res.evaluation, "correct");
+    assert.equal(res.explanation, "Synonyme fidèle pour ce contexte.");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+
 

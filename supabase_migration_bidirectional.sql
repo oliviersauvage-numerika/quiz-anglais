@@ -22,3 +22,7 @@ COMMENT ON COLUMN words.last_reviewed_at_en_fr IS 'Date de dernière révision S
 COMMENT ON COLUMN words.first_learned_at_en_fr IS 'Date de passage initial au palier 1 en Anglais -> Français';
 COMMENT ON COLUMN words.last_answered_en_fr IS 'Date de la dernière tentative en Anglais -> Français';
 COMMENT ON COLUMN words.last_correct_en_fr IS 'Résultat de la dernière tentative en Anglais -> Français';
+
+-- Recharger immédiatement le cache de schéma Supabase (PostgREST)
+NOTIFY pgrst, 'reload schema';
+

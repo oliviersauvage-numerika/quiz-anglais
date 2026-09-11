@@ -435,11 +435,27 @@ class SyncService {
     if (!this.client) return { success: false, reason: "not_configured" };
     try {
       const dbWord = toDBWord(word);
-      const { data, error } = await this.client
+      let { data, error } = await this.client
         .from("words")
         .insert(dbWord)
         .select()
         .single();
+
+      // Si erreur de colonne manquante (migration SQL non encore appliquée sur Supabase), repli gracieux sans bloquer
+      if (error && (error.code === "PGRST204" || error.code === "42703" || (error.message && (error.message.includes("column") || error.message.includes("schema cache"))))) {
+        console.warn("Colonnes en_fr non encore créées sur Supabase (exécutez supabase_migration_bidirectional.sql). Repli pour insertion standard.");
+        const fallbackWord = { ...dbWord };
+        Object.keys(fallbackWord).forEach((k) => {
+          if (k.endsWith("_en_fr")) delete fallbackWord[k];
+        });
+        const fallbackRes = await this.client
+          .from("words")
+          .insert(fallbackWord)
+          .select()
+          .single();
+        error = fallbackRes.error;
+        data = fallbackRes.data;
+      }
 
       if (error) throw error;
       this.lastSyncedAt = new Date();
@@ -592,10 +608,25 @@ class SyncService {
       // Effectuer un upsert par paquets pour éviter les limites de taille de requête
       const chunkSize = 50;
       for (let i = 0; i < dbWords.length; i += chunkSize) {
-        const chunk = dbWords.slice(i, i + chunkSize);
-        const { error } = await this.client
+        let { error } = await this.client
           .from("words")
           .upsert(chunk, { onConflict: "id" });
+
+        // Si colonnes en_fr manquantes dans Supabase, repli sans les colonnes en_fr
+        if (error && (error.code === "PGRST204" || error.code === "42703" || (error.message && (error.message.includes("column") || error.message.includes("schema cache"))))) {
+          console.warn("Colonnes en_fr non encore créées sur Supabase lors de la migration. Repli pour migration standard.");
+          const fallbackChunk = chunk.map((item) => {
+            const copy = { ...item };
+            Object.keys(copy).forEach((k) => {
+              if (k.endsWith("_en_fr")) delete copy[k];
+            });
+            return copy;
+          });
+          const fallbackRes = await this.client
+            .from("words")
+            .upsert(fallbackChunk, { onConflict: "id" });
+          error = fallbackRes.error;
+        }
 
         if (error) throw error;
       }

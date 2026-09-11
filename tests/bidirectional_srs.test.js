@@ -215,3 +215,60 @@ test("7. Réinitialisation ciblée de la progression d'un seul sens", async () =
   assert.equal(wordFrEn.srs_stage_en_fr, 0, "Le palier en_fr était déjà à 0");
 });
 
+test("8. Repli gracieux d'insertWord lorsque Supabase n'a pas encore les colonnes _en_fr", async () => {
+  const { syncService } = await import("../src/services/syncService.js");
+
+  let insertCalls = [];
+  syncService.client = {
+    from: (table) => ({
+      insert: (payload) => {
+        insertCalls.push(payload);
+        return {
+          select: () => ({
+            single: async () => {
+              // 1er appel avec champs en_fr : simuler l'erreur de colonne manquante PostgREST
+              if (payload.first_learned_at_en_fr !== undefined || payload.srs_stage_en_fr !== undefined) {
+                return {
+                  data: null,
+                  error: {
+                    code: "PGRST204",
+                    message: "Could not find the 'first_learned_at_en_fr' column of 'words' in the schema cache"
+                  }
+                };
+              }
+              // 2ème appel de repli sans champs en_fr : succès
+              return {
+                data: {
+                  id: payload.id,
+                  english_word: payload.english_word,
+                  part_of_speech: payload.part_of_speech,
+                  french_translations: payload.french_translations,
+                  srs_stage: 0,
+                  success_count: 0
+                },
+                error: null
+              };
+            }
+          })
+        };
+      }
+    })
+  };
+
+  const newWord = {
+    id: "word-test-fallback",
+    english_word: "farthing",
+    part_of_speech: "noun",
+    french_translations: ["farthing", "ancienne pièce de monnaie anglaise"]
+  };
+
+  const result = await syncService.insertWord(newWord);
+  assert.equal(result.success, true, "L'insertion doit réussir grâce au repli gracieux");
+  assert.equal(insertCalls.length, 2, "Deux tentatives doivent avoir été effectuées");
+  // La 2ème tentative ne doit pas avoir de colonnes se terminant par _en_fr
+  const secondPayload = insertCalls[1];
+  const hasEnFrCols = Object.keys(secondPayload).some((k) => k.endsWith("_en_fr"));
+  assert.equal(hasEnFrCols, false, "Le 2ème appel doit avoir retiré les colonnes _en_fr");
+});
+
+

@@ -275,6 +275,16 @@ create table if not exists public.words (
   is_mastered boolean default false,
   last_answered timestamptz,
   last_correct boolean,
+  -- Progression Anglais -> Français (Bidirectionnel)
+  srs_stage_en_fr integer default 0,
+  success_count_en_fr integer default 0,
+  learned_en_fr boolean default false,
+  is_mastered_en_fr boolean default false,
+  next_review_at_en_fr timestamptz,
+  last_reviewed_at_en_fr timestamptz,
+  first_learned_at_en_fr timestamptz,
+  last_answered_en_fr timestamptz,
+  last_correct_en_fr boolean,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -288,6 +298,15 @@ alter table public.words add column if not exists last_reviewed_at timestamptz;
 alter table public.words add column if not exists is_mastered boolean default false;
 alter table public.words add column if not exists last_answered timestamptz;
 alter table public.words add column if not exists last_correct boolean;
+alter table public.words add column if not exists srs_stage_en_fr integer default 0;
+alter table public.words add column if not exists success_count_en_fr integer default 0;
+alter table public.words add column if not exists learned_en_fr boolean default false;
+alter table public.words add column if not exists is_mastered_en_fr boolean default false;
+alter table public.words add column if not exists next_review_at_en_fr timestamptz;
+alter table public.words add column if not exists last_reviewed_at_en_fr timestamptz;
+alter table public.words add column if not exists first_learned_at_en_fr timestamptz;
+alter table public.words add column if not exists last_answered_en_fr timestamptz;
+alter table public.words add column if not exists last_correct_en_fr boolean;
 alter table public.words add column if not exists created_at timestamptz default now();
 alter table public.words add column if not exists updated_at timestamptz default now();
 
@@ -329,7 +348,10 @@ create policy "Allow public access on words" on public.words
 
 drop policy if exists "Allow public access on quiz_stats" on public.quiz_stats;
 create policy "Allow public access on quiz_stats" on public.quiz_stats
-  for all using (true) with check (true);`;
+  for all using (true) with check (true);
+
+-- 5. Recharger instantanément le cache de schéma Supabase
+notify pgrst, 'reload schema';`;
 
   const handleCopySQL = async () => {
     try {

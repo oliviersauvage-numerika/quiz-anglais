@@ -116,6 +116,7 @@ export const srsService = {
   getProgress: (word, direction = "fr_en") => {
     if (!word) {
       return {
+        stage: 0,
         srsStage: 0,
         learningSuccessCount: 0,
         totalCorrectAnswers: 0,
@@ -132,6 +133,7 @@ export const srsService = {
     if (direction === "en_fr") {
       const stage = typeof word.srsStage_en_fr === "number" ? word.srsStage_en_fr : 0;
       return {
+        stage,
         srsStage: stage,
         learningSuccessCount: word.learningSuccessCount_en_fr || 0,
         totalCorrectAnswers: word.totalCorrectAnswers_en_fr || 0,
@@ -148,6 +150,7 @@ export const srsService = {
     // Direction "fr_en" (par défaut / existante)
     const stage = typeof word.srsStage === "number" ? word.srsStage : 0;
     return {
+      stage,
       srsStage: stage,
       learningSuccessCount: word.learningSuccessCount || 0,
       totalCorrectAnswers: word.totalCorrectAnswers || 0,

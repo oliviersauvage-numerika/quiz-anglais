@@ -360,5 +360,33 @@ test("10. evaluateFrenchAnswerSemantic valide avec succès via Gemini simulé", 
   }
 });
 
+test("11. getProgress expose stage et srsStage, permettant le déclenchement de la célébration à 3 réussites", () => {
+  const wordInitial = srsService.sanitizeWord({
+    id: "test-celebration-word",
+    english_word: "thrive",
+    part_of_speech: "verb",
+    french_translations: ["prospérer"],
+    srsStage: 0,
+    learningSuccessCount: 2,
+    learned: false
+  });
+
+  const prevProg = srsService.getProgress(wordInitial, "fr_en");
+  assert.equal(prevProg.stage, 0);
+  assert.equal(prevProg.srsStage, 0);
+  assert.equal(prevProg.learned, false);
+
+  const updatedWord = srsService.calculateNextState(wordInitial, true, "srs-review", new Date(), "fr_en");
+  const updatedProg = srsService.getProgress(updatedWord, "fr_en");
+
+  assert.equal(updatedProg.stage, 1);
+  assert.equal(updatedProg.srsStage, 1);
+  assert.equal(updatedProg.learned, true);
+
+  // Condition exacte du feu d'artifice dans QuizView
+  const isPromotedToPalier1 = (updatedProg.stage === 1 || updatedProg.srsStage === 1) && !prevProg.learned;
+  assert.equal(isPromotedToPalier1, true, "La promotion au Palier 1 doit être détectée pour lancer le feu d'artifice");
+});
+
 
 

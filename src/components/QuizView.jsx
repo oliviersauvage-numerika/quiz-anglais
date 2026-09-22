@@ -443,7 +443,8 @@ export function QuizView({ words, onWordsUpdate, onOpenAdd }) {
       const updatedProg = srsService.getProgress(updatedWord, targetDirection);
       const prevProg = srsService.getProgress(currentWord, targetDirection);
 
-      if (quizMode !== "free-practice" && (updatedProg.isMastered || (updatedProg.stage === 1 && !prevProg.learned))) {
+      const isPromotedToPalier1 = (updatedProg.stage === 1 || updatedProg.srsStage === 1) && !prevProg.learned;
+      if (quizMode !== "free-practice" && (updatedProg.isMastered || isPromotedToPalier1)) {
         try {
           confetti({
             particleCount: 80,
